@@ -79,9 +79,9 @@ bedrock_server/plugins/qqsync_plugin/config.json
 - 检查Python 3.12+ 和 Endstone 0.9.4+ 版本
 
 **无法连接？**
-- 检查 NapCat 是否运行
-- NapCat安装文档：https://napneko.github.io/guide/boot/Shell
-- 确认 WebSocket地址 和 token 填写正确
+- 检查 NapCat 是否正常运行
+- NapCat安装：https://napneko.github.io/guide/boot/Shell
+- 确认 WebSocket地址 和 token 是否填写正确
 
 **消息不同步？**
 - 检查群号配置
