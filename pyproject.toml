@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "endstone-qqsync-plugin"
+version = "0.0.1"
+description = "Endstone QQsync群服互通插件"
+authors = [
+    { name = "yuexps", email = "yuexps@qq.com" },
+]
+
+[project.urls]
+Homepage = "https://github.com/yuexps/endstone-qqsync-plugin"
+
+[project.entry-points."endstone"]
+qqsync-plugin = "endstone_qqsync_plugin.qqsync_plugin:qqsync"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/endstone_qqsync_plugin"]
