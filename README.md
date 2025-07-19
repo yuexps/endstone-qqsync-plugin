@@ -86,10 +86,6 @@ bedrock_server/plugins/qqsync_plugin/config.json
 - 检查群号配置
 - 确认同步开关状态
 
-## 👨‍💻 作者
-
-**yuexps** - [GitHub](https://github.com/yuexps/endstone-qqsync-plugin)
-
 ---
 
 **⭐ 觉得有用请给个 Star！**
