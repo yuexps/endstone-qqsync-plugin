@@ -75,7 +75,7 @@ bedrock_server/plugins/qqsync_plugin/config.json
 ## �️ 故障排除
 
 **无法加载？**
-- 检查 websockets 是否安装 `pip install websockets`
+- ~检查 websockets 是否安装 `pip install websockets`~ (已内置）
 - 检查Python 3.12+ 和 Endstone 0.9.4+ 版本
 
 **无法连接？**
