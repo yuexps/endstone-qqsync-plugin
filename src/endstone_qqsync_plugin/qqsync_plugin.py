@@ -13,6 +13,8 @@ import threading
 import json
 from datetime import datetime
 from pathlib import Path
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
 import websockets
 
 # 全局变量保存当前websocket连接
@@ -352,7 +354,6 @@ async def handle_message(ws, data: dict):
     group_id = data.get("group_id")
     user_id = str(data.get("user_id"))
     nickname = data.get("sender", {}).get("nickname", user_id)
-    raw_msg = data.get("raw_message", "").strip()
     
     # 解析消息内容，处理非文本消息
     processed_msg = parse_qq_message(data)
@@ -374,36 +375,41 @@ async def handle_message(ws, data: dict):
         return
 
     # 命令处理仍然使用原始消息
-    cmd, *args = processed_msg[1:].split(maxsplit=1)
+    cmd_parts = processed_msg[1:].split()
+    if not cmd_parts:
+        return
+    
+    cmd = cmd_parts[0]
+    args = cmd_parts[1:] if len(cmd_parts) > 1 else []
     reply = ""
 
-    if cmd == "help":
+    if cmd == "help" and len(cmd_parts) == 1:
         reply = _plugin_instance.get_config("help_msg", "暂无帮助信息")
 
-    elif cmd == "list":
+    elif cmd == "list" and len(cmd_parts) == 1:
         if _plugin_instance:
             players = [player.name for player in _plugin_instance.server.online_players]
             reply = "在线玩家：\n" + "\n".join(players) if players else "当前没有在线玩家"
         else:
             reply = "插件未正确初始化"
 
-    elif cmd == "cmd":
+    elif cmd == "cmd" and len(args) >= 1:
         admins = _plugin_instance.get_config("admins", [])
         if not admins or str(user_id) in admins:
-            if not args:
-                reply = "用法：/cmd <服务器命令>"
-            else:
-                server_cmd = args[0]
-                try:
-                    # 使用调度器在主线程中执行命令
-                    result = await run_server_command_async(server_cmd)
-                    reply = f"服务器执行结果：\n{result}"
-                except Exception as e:
-                    reply = f"执行出错：{e}"
+            server_cmd = " ".join(args)
+            try:
+                # 使用调度器在主线程中执行命令
+                result = await run_server_command_async(server_cmd)
+                reply = f"服务器执行结果：\n{result}"
+            except Exception as e:
+                reply = f"执行出错：{e}"
         else:
             reply = "该命令仅限管理员使用"
+    
+    elif cmd == "cmd" and len(args) == 0:
+        reply = "用法：/cmd <服务器命令>"
 
-    elif cmd == "reload":
+    elif cmd == "reload" and len(cmd_parts) == 1:
         admins = _plugin_instance.get_config("admins", [])
         if not admins or str(user_id) in admins:
             if _plugin_instance.reload_config():
@@ -413,7 +419,7 @@ async def handle_message(ws, data: dict):
         else:
             reply = "该命令仅限管理员使用"
 
-    elif cmd == "tog_qq":
+    elif cmd == "tog_qq" and len(cmd_parts) == 1:
         admins = _plugin_instance.get_config("admins", [])
         if not admins or str(user_id) in admins:
             current_state = _plugin_instance.get_config("enable_qq_to_game", True)
@@ -424,7 +430,7 @@ async def handle_message(ws, data: dict):
         else:
             reply = "该命令仅限管理员使用"
 
-    elif cmd == "tog_game":
+    elif cmd == "tog_game" and len(cmd_parts) == 1:
         admins = _plugin_instance.get_config("admins", [])
         if not admins or str(user_id) in admins:
             current_state = _plugin_instance.get_config("enable_game_to_qq", True)
