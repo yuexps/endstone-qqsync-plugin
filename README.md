@@ -81,6 +81,7 @@ bedrock_server/plugins/qqsync_plugin/config.json
 
 **无法连接？**
 - 检查 NapCat 是否运行
+
 (NapCat安装文档：https://napneko.github.io/guide/boot/Shell)
 - 确认 WebSocket地址 和 token 填写正确
 
