@@ -30,7 +30,8 @@ bedrock_server/plugins/qqsync_plugin/config.json
 修改以下配置：
 ```json
 {
-  "napcat_ws": "ws://localhost:3001", //正向WS
+  "napcat_ws": "ws://localhost:3001",
+  //正向WS (NapCat WebSocket服务器 地址)
   "access_token": "",
   "target_group": 712523104, //监控群聊
   "admins": ["2899659758"] //管理员QQ
@@ -38,7 +39,7 @@ bedrock_server/plugins/qqsync_plugin/config.json
 ```
 
 ### 3. 启动
-启动服务器即可自动连接并开始同步。
+启动Endstone服务器即可自动连接NapCat并开始同步群服消息。
 
 ## 🎯 使用说明
 
@@ -80,7 +81,8 @@ bedrock_server/plugins/qqsync_plugin/config.json
 
 **无法连接？**
 - 检查 NapCat 是否运行
-- 确认 WebSocket 地址和 token
+(NapCat安装文档：https://napneko.github.io/guide/boot/Shell)
+- 确认 WebSocket地址 和 token 填写正确
 
 **消息不同步？**
 - 检查群号配置
