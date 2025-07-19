@@ -3,7 +3,7 @@
 一个简易的 Minecraft 服务器与 QQ 群聊双向互通插件，基于 Endstone 插件框架开发。
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/python-3.8+-green.svg)
+![Python](https://img.shields.io/badge/python-3.12+-green.svg)
 ![Endstone](https://img.shields.io/badge/endstone-0.6-orange.svg)
 
 ## ✨ 核心功能
@@ -75,7 +75,7 @@ bedrock_server/plugins/qqsync_plugin/config.json
 ## �️ 故障排除
 
 **无法加载？**
-- 检查 websockets 是否安装
+- 检查 websockets 是否安装 `pip install websockets`
 - 检查Python 3.12+ 和 Endstone 0.9.4+ 版本
 
 **无法连接？**
