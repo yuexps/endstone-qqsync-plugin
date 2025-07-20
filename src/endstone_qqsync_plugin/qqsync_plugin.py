@@ -11,43 +11,41 @@ from endstone.event import (
 import asyncio
 import threading
 import json
-from datetime import datetime
 from pathlib import Path
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
 import websockets
 
-# 全局变量保存当前websocket连接
 _current_ws = None
-# 全局变量保存插件实例
 _plugin_instance = None
 
 class qqsync(Plugin):
 
     api_version = "0.6"
     
+    def on_load(self) -> None:
+        self.logger.info(f"{ColorFormat.BLUE}qqsync_plugin {ColorFormat.WHITE}正在加载...{ColorFormat.RESET}")
+    
     def on_enable(self) -> None:
         global _plugin_instance
         _plugin_instance = self
         
-        # 初始化配置
         self._init_config()
 
         #注册事件
         self.register_events(self)
         
-        # 1. 创建专用事件循环
+        # 创建专用事件循环
         self._loop = asyncio.new_event_loop()
         
-        # 2. 在新线程里启动该循环
+        # 在新线程里启动该循环
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
-        # 3. 把协程提交到该循环
+        # 把协程提交到该循环
         future = asyncio.run_coroutine_threadsafe(connect_forever(), self._loop)
         self._task = future
 
-        # 使用彩色文本显示启用消息
         startup_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已启用{ColorFormat.RESET}"
         self.logger.info(startup_msg)
         welcome_msg = f"{ColorFormat.BLUE}欢迎使用QQsync群服互通插件，{ColorFormat.YELLOW}作者：yuexps{ColorFormat.RESET}"
@@ -66,13 +64,7 @@ class qqsync(Plugin):
             "admins": ["2899659758"],
             "enable_qq_to_game": True,
             "enable_game_to_qq": True,
-            "help_msg": """可用命令：
-/help — 显示本帮助
-/list — 查看在线玩家
-/cmd — 执行命令（仅管理员）
-/tog_qq — 切换QQ消息转发开关（仅管理员）
-/tog_game — 切换游戏消息转发开关（仅管理员）
-/reload — 重新加载配置（仅管理员）"""
+            "help_msg": "🎮 QQsync群服互通 - 命令：\n\n📊 查询命令（所有用户可用）：\n/help — 显示本帮助信息\n/list — 查看在线玩家列表\n/version — 查看服务器版本\n/plugins — 查看插件列表\n/tps — 查看服务器性能指标\n/info — 查看服务器综合信息\n\n⚙️ 管理命令（仅管理员可用）：\n/cmd <命令> — 执行服务器命令\n/tog_qq — 切换QQ消息转发开关 \n/tog_game — 切换游戏转发开关\n/reload — 重新加载配置文件"
         }
         
         # 如果配置文件不存在，创建默认配置
@@ -89,6 +81,28 @@ class qqsync(Plugin):
         except Exception as e:
             self.logger.error(f"读取配置文件失败: {e}")
             self._config = self.default_config.copy()
+        
+        # 检查并合并新的配置项
+        config_updated = False
+        for key, value in self.default_config.items():
+            if key not in self._config:
+                self._config[key] = value
+                config_updated = True
+                self.logger.info(f"添加新配置项: {key}")
+            elif key == "help_msg" and self._config[key] != value:
+                # 特殊处理help_msg，当默认内容更新时也更新配置
+                self._config[key] = value
+                config_updated = True
+                self.logger.info(f"更新配置项: {key}")
+        
+        # 如果有新配置项，保存到文件
+        if config_updated:
+            try:
+                with open(self.config_file, 'w', encoding='utf-8') as f:
+                    json.dump(self._config, f, indent=2, ensure_ascii=False)
+                self.logger.info("配置文件已更新并保存")
+            except Exception as e:
+                self.logger.error(f"保存更新的配置文件失败: {e}")
         
         self.logger.info(f"{ColorFormat.AQUA}配置文件已加载{ColorFormat.RESET}")
         self.logger.info(f"{ColorFormat.GOLD}NapCat WebSocket: {ColorFormat.WHITE}{self._config.get('napcat_ws')}{ColorFormat.RESET}")
@@ -128,7 +142,7 @@ class qqsync(Plugin):
         self._loop.run_forever()
 
     def on_disable(self) -> None:
-        shutdown_msg = f"{ColorFormat.RED}qqsync_plugin {ColorFormat.DARK_RED}卸载{ColorFormat.RESET}"
+        shutdown_msg = f"{ColorFormat.RED}qqsync_plugin {ColorFormat.RED}卸载{ColorFormat.RESET}"
         self.logger.info(shutdown_msg)
         # 优雅关闭
         if hasattr(self, "_task"):
@@ -388,8 +402,149 @@ async def handle_message(ws, data: dict):
 
     elif cmd == "list" and len(cmd_parts) == 1:
         if _plugin_instance:
-            players = [player.name for player in _plugin_instance.server.online_players]
-            reply = "在线玩家：\n" + "\n".join(players) if players else "当前没有在线玩家"
+            try:
+                all_players = _plugin_instance.server.online_players
+                players = []
+                for player in all_players:
+                    if player and hasattr(player, 'name') and player.name is not None:
+                        players.append(player.name)
+                    else:
+                        _plugin_instance.logger.warning(f"发现无效玩家对象: {player}")
+                
+                player_count = len(players)
+                max_players = _plugin_instance.server.max_players
+                if players:
+                    reply = f"在线玩家 ({player_count}/{max_players})：\n" + "\n".join(players)
+                else:
+                    reply = f"当前没有在线玩家 (0/{max_players})"
+            except Exception as e:
+                _plugin_instance.logger.error(f"获取玩家列表时出错: {e}")
+                reply = f"获取玩家列表失败: {e}"
+        else:
+            reply = "插件未正确初始化"
+
+    elif cmd == "version" and len(cmd_parts) == 1:
+        if _plugin_instance:
+            server_version = _plugin_instance.server.version
+            minecraft_version = _plugin_instance.server.minecraft_version
+            reply = f"服务器版本信息：\nEndstone: {server_version}\nMinecraft: {minecraft_version}"
+        else:
+            reply = "插件未正确初始化"
+
+    elif cmd == "plugins" and len(cmd_parts) == 1:
+        if _plugin_instance:
+            try:
+                all_plugins = _plugin_instance.server.plugin_manager.plugins
+                plugin_info_list = []
+                for plugin in all_plugins:
+                    if plugin:
+                        try:
+                            # 首先尝试使用 PluginDescription（如果存在）
+                            desc = plugin.description
+                            if desc is not None:
+                                plugin_name = desc.name if hasattr(desc, 'name') and desc.name else None
+                                plugin_desc = desc.description if hasattr(desc, 'description') and desc.description else None
+                                plugin_version = desc.version if hasattr(desc, 'version') and desc.version else None
+                                
+                                # 获取作者信息 - authors 是字符串列表
+                                authors_str = None
+                                if hasattr(desc, 'authors') and desc.authors:
+                                    if isinstance(desc.authors, list):
+                                        authors_str = ", ".join(desc.authors)
+                                    elif isinstance(desc.authors, str):
+                                        authors_str = desc.authors
+                                
+                                # 获取网站信息（可选）
+                                website = ""
+                                if hasattr(desc, 'website') and desc.website:
+                                    website = f"\n   🌐 网站: {desc.website}"
+                                
+                                # 如果有完整信息，格式化详细插件信息
+                                if plugin_name and plugin_desc and plugin_version and authors_str:
+                                    plugin_info = f"📦 {plugin_name} v{plugin_version}\n   📝 {plugin_desc}\n   👤 作者: {authors_str}{website}"
+                                    plugin_info_list.append(plugin_info)
+                                else:
+                                    # 信息不完整，降级到简单格式
+                                    if plugin_name:
+                                        plugin_info_list.append(f"📦 {plugin_name}")
+                                    else:
+                                        raise Exception("无法获取插件名称")
+                            else:
+                                # description 为 None，使用 Plugin 类的属性
+                                plugin_name = plugin.name if hasattr(plugin, 'name') and plugin.name else None
+                                plugin_version = plugin.version if hasattr(plugin, 'version') and plugin.version else None
+                                plugin_desc = plugin.description if hasattr(plugin, 'description') and plugin.description else None
+                                
+                                # 获取作者信息
+                                authors_str = None
+                                if hasattr(plugin, 'authors') and plugin.authors:
+                                    if isinstance(plugin.authors, list):
+                                        authors_str = ", ".join(plugin.authors)
+                                    elif isinstance(plugin.authors, str):
+                                        authors_str = plugin.authors
+                                
+                                # 获取网站信息
+                                website = ""
+                                if hasattr(plugin, 'website') and plugin.website:
+                                    website = f"\n   🌐 网站: {plugin.website}"
+                                
+                                # 如果有完整信息，格式化详细插件信息
+                                if plugin_name and plugin_desc and plugin_version and authors_str:
+                                    plugin_info = f"📦 {plugin_name} v{plugin_version}\n   📝 {plugin_desc}\n   👤 作者: {authors_str}{website}"
+                                    plugin_info_list.append(plugin_info)
+                                elif plugin_name:
+                                    # 只有名称，使用简单格式
+                                    plugin_info_list.append(f"📦 {plugin_name}")
+                                else:
+                                    # 使用类名作为备用方案
+                                    raise Exception("无法获取插件名称")
+                            
+                        except Exception as e:
+                            # 降级到基本信息 - 只显示类名
+                            try:
+                                plugin_name = plugin.__class__.__name__
+                                if plugin_name.endswith('Plugin'):
+                                    plugin_name = plugin_name[:-6]
+                                plugin_info_list.append(f"📦 {plugin_name}")
+                            except:
+                                plugin_info_list.append("📦 未知插件")
+                
+                if plugin_info_list:
+                    reply = f"已加载插件 ({len(plugin_info_list)})：\n\n" + "\n\n".join(plugin_info_list)
+                else:
+                    reply = "没有加载任何插件"
+            except Exception as e:
+                _plugin_instance.logger.error(f"获取插件列表时出错: {e}")
+                reply = f"获取插件列表失败: {e}"
+        else:
+            reply = "插件未正确初始化"
+
+    elif cmd == "tps" and len(cmd_parts) == 1:
+        if _plugin_instance:
+            current_tps = _plugin_instance.server.current_tps
+            average_tps = _plugin_instance.server.average_tps
+            current_mspt = _plugin_instance.server.current_mspt
+            average_mspt = _plugin_instance.server.average_mspt
+            reply = f"服务器性能：\n当前 TPS: {current_tps:.2f}\n平均 TPS: {average_tps:.2f}\n当前 MSPT: {current_mspt:.2f}ms\n平均 MSPT: {average_mspt:.2f}ms"
+        else:
+            reply = "插件未正确初始化"
+
+    elif cmd == "info" and len(cmd_parts) == 1:
+        if _plugin_instance:
+            try:
+                player_count = len(_plugin_instance.server.online_players)
+                max_players = _plugin_instance.server.max_players
+                server_name = _plugin_instance.server.name
+                port = _plugin_instance.server.port
+                server_version = _plugin_instance.server.version
+                minecraft_version = _plugin_instance.server.minecraft_version
+                online_mode = "在线模式" if _plugin_instance.server.online_mode else "离线模式"
+                current_tps = _plugin_instance.server.current_tps
+                
+                reply = f"服务器信息：\n名称: {server_name}\n端口: {port}\n版本: Endstone {server_version} (Minecraft {minecraft_version})\n模式: {online_mode}\n玩家: {player_count}/{max_players}\nTPS: {current_tps:.1f}"
+            except Exception as e:
+                _plugin_instance.logger.error(f"获取服务器信息时出错: {e}")
+                reply = f"获取服务器信息失败: {e}"
         else:
             reply = "插件未正确初始化"
 
@@ -398,11 +553,14 @@ async def handle_message(ws, data: dict):
         if not admins or str(user_id) in admins:
             server_cmd = " ".join(args)
             try:
-                # 使用调度器在主线程中执行命令
-                result = await run_server_command_async(server_cmd)
-                reply = f"服务器执行结果：\n{result}"
+                # 直接执行命令，不捕获输出
+                _plugin_instance.server.scheduler.run_task(
+                    _plugin_instance,
+                    lambda: _plugin_instance.server.dispatch_command(_plugin_instance.server.command_sender, server_cmd)
+                )
+                reply = f"✅ 命令已执行: {server_cmd}"
             except Exception as e:
-                reply = f"执行出错：{e}"
+                reply = f"❌ 执行出错：{e}"
         else:
             reply = "该命令仅限管理员使用"
     
@@ -426,7 +584,8 @@ async def handle_message(ws, data: dict):
             _plugin_instance._config["enable_qq_to_game"] = not current_state
             _plugin_instance.save_config()
             status = "启用" if not current_state else "禁用"
-            reply = f"✅ QQ消息转发已{status}"
+            icon = "✅" if not current_state else "❌"
+            reply = f"{icon} QQ消息转发已{status}"
         else:
             reply = "该命令仅限管理员使用"
 
@@ -437,7 +596,8 @@ async def handle_message(ws, data: dict):
             _plugin_instance._config["enable_game_to_qq"] = not current_state
             _plugin_instance.save_config()
             status = "启用" if not current_state else "禁用"
-            reply = f"✅ 游戏消息转发已{status}"
+            icon = "✅" if not current_state else "❌"
+            reply = f"{icon} 游戏消息转发已{status}"
         else:
             reply = "该命令仅限管理员使用"
 
@@ -510,84 +670,3 @@ async def message_loop(ws):
         if data.get("group_id") != target_group:
             continue
         await handle_message(ws, data)
-
-async def run_server_command_async(cmd: str) -> str:
-    """
-    异步执行服务器命令，使用调度器在主线程中执行
-    """
-    global _plugin_instance
-    
-    if not _plugin_instance:
-        return "插件未正确初始化"
-    
-    try:
-        # 创建一个 Future 来获取执行结果
-        import concurrent.futures
-        
-        # 定义在主线程中执行的函数
-        def execute_command():
-            try:
-                # 执行命令
-                _plugin_instance.server.dispatch_command(
-                    _plugin_instance.server.command_sender, cmd
-                )
-                
-                # 对于特定命令，返回相应的结果
-                if cmd == "list":
-                    players = [player.name for player in _plugin_instance.server.online_players]
-                    if players:
-                        return f"在线玩家 ({len(players)})：\n" + "\n".join(players)
-                    else:
-                        return "当前没有在线玩家"
-                else:
-                    return f"命令 '{cmd}' 已执行"
-            except Exception as e:
-                return f"执行命令时出错：{e}"
-        
-        # 使用调度器在主线程中执行命令
-        future = concurrent.futures.Future()
-        
-        def run_and_set_result():
-            try:
-                result = execute_command()
-                future.set_result(result)
-            except Exception as e:
-                future.set_exception(e)
-        
-        _plugin_instance.server.scheduler.run_task(_plugin_instance, run_and_set_result)
-        
-        # 等待结果（带超时）
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, lambda: future.result(timeout=5))
-        return result
-        
-    except Exception as e:
-        return f"执行命令时出错：{e}"
-
-def run_server_command(cmd: str) -> str:
-    """
-    在服务器执行命令。
-    """
-    global _plugin_instance
-    
-    if not _plugin_instance:
-        return "插件未正确初始化"
-    
-    try:
-        # 执行命令
-        _plugin_instance.server.dispatch_command(
-            _plugin_instance.server.command_sender, cmd
-        )
-        
-        # 对于特定命令，返回相应的结果
-        if cmd == "list":
-            players = [player.name for player in _plugin_instance.server.online_players]
-            if players:
-                return f"在线玩家 ({len(players)})：\n" + "\n".join(players)
-            else:
-                return "当前没有在线玩家"
-        else:
-            return f"命令 '{cmd}' 已执行"
-            
-    except Exception as e:
-        return f"执行命令时出错：{e}"
