@@ -30,10 +30,13 @@ bedrock_server/plugins/qqsync_plugin/config.json
 修改以下配置：
 ```json
 {
-  "napcat_ws": "ws://localhost:3001", //正向WS (NapCat WebSocket服务器 地址)
-  "access_token": "",
-  "target_group": 712523104, //监控群聊
-  "admins": ["2899659758"] //管理员QQ
+  "napcat_ws": "ws://localhost:3001",     // NapCat WebSocket服务器 地址（正向WS）
+  "access_token": "your_token_here",     // 访问令牌（可选）
+  "target_group": 712523104,             // 目标QQ群号
+  "admins": ["2899659758"],              // 管理员QQ号列表
+  "enable_qq_to_game": true,             // QQ消息转发到游戏
+  "enable_game_to_qq": true,             // 游戏消息转发到QQ
+  "help_msg": "🎮 QQsync群服互通 - 命令：..."  // 自定义帮助信息
 }
 ```
 
@@ -43,34 +46,54 @@ bedrock_server/plugins/qqsync_plugin/config.json
 ## 🎯 使用说明
 
 ### QQ群内命令
-- `/help` - 显示帮助
-- `/list` - 查看在线玩家
-- `/cmd <命令>` - 执行服务器命令（管理员）
-- `/tog_qq` - 切换QQ→游戏转发（管理员）
-- `/tog_game` - 切换游戏→QQ转发（管理员）
-- `/reload` - 重新加载配置（管理员）
+
+#### � 查询命令（所有用户可用）
+- `/help` - 显示本帮助信息
+- `/list` - 查看在线玩家列表
+- `/version` - 查看服务器版本信息
+- `/plugins` - 查看已加载的插件列表
+- `/tps` - 查看服务器性能指标（TPS等）
+- `/info` - 查看服务器综合信息
+
+#### ⚙️ 管理命令（仅管理员可用）
+- `/cmd <命令>` - 执行服务器命令
+  ```
+  示例：/cmd list
+  示例：/cmd say 欢迎大家！
+  示例：/cmd time set day
+  ```
+- `/tog_qq` - 切换QQ消息→游戏转发开关
+- `/tog_game` - 切换游戏消息→QQ转发开关
+- `/reload` - 重新加载配置文件
 
 ### 消息示例
-**游戏 → QQ群：**
+
+#### 🎮 游戏 → QQ群
 ```
 🟢 Steve 加入了服务器
 💬 Steve: 大家好！
-🔴 Steve 离开了服务器
+� Steve 被僵尸杀死了
+�🔴 Steve 离开了服务器
 ```
 
-**QQ群 → 游戏：**
+#### 💬 QQ群 → 游戏
 ```
-[QQ群] 张三: 欢迎新玩家！
-[QQ群] 李四: [图片]
+[QQ群] 群友A: 欢迎新玩家！
+[QQ群] 群友B: [图片]
+[QQ群] 群友C: @全体成员 服务器要重启了
+[QQ群] 群友D: [语音]
 ```
 
 ## 🔧 消息类型支持
 
-| QQ消息 | 游戏显示 | QQ消息 | 游戏显示 |
-|--------|----------|--------|----------|
-| 图片 | `[图片]` | 视频 | `[视频]` |
-| 语音 | `[语音]` | 文件 | `[文件]` |
-| @某人 | `@QQ号` | 表情 | `[表情]` |
+### 📱 QQ消息解析
+插件会自动解析各种QQ消息类型并转换为游戏内可读格式：
+
+### 🎯 智能处理
+- **混合消息**：文本+图片会显示为 `文字内容[图片]`
+- **纯非文本**：只有图片等会显示为对应标识符
+- **空消息**：无内容时显示 `[空消息]`
+- **CQ码兼容**：自动解析 NapCat 的 CQ 码格式
 
 ## �️ 故障排除
 
