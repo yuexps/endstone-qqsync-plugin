@@ -64,7 +64,7 @@ class qqsync(Plugin):
             "admins": ["2899659758"],
             "enable_qq_to_game": True,
             "enable_game_to_qq": True,
-            "help_msg": "🎮 QQsync群服互通 - 命令：\n\n📊 查询命令（所有用户可用）：\n/help — 显示本帮助信息\n/list — 查看在线玩家列表\n/version — 查看服务器版本\n/plugins — 查看插件列表\n/tps — 查看服务器性能指标\n/info — 查看服务器综合信息\n\n⚙️ 管理命令（仅管理员可用）：\n/cmd <命令> — 执行服务器命令\n/tog_qq — 切换QQ消息转发开关 \n/tog_game — 切换游戏转发开关\n/reload — 重新加载配置文件"
+            "help_msg": "🎮 QQsync群服互通 - 命令：\n\n📊 查询命令（所有用户可用）：\n/help — 显示本帮助信息\n/list — 查看在线玩家列表\n/tps — 查看服务器性能指标\n/info — 查看服务器综合信息\n\n⚙️ 管理命令（仅管理员可用）：\n/cmd <命令> — 执行服务器命令\n/tog_qq — 切换QQ消息转发开关 \n/tog_game — 切换游戏转发开关\n/reload — 重新加载配置文件"
         }
         
         # 如果配置文件不存在，创建默认配置
@@ -215,92 +215,12 @@ class qqsync(Plugin):
 def parse_qq_message(message_data):
     """
     解析QQ消息，将非文本内容转换为对应的标识符
-    支持结构化消息和CQ码格式
     """
     import re
     
     # 获取原始消息文本
     raw_message = message_data.get("raw_message", "")
     
-    # 首先尝试处理结构化消息
-    message = message_data.get("message", [])
-    
-    if isinstance(message, list) and message:
-        # 处理结构化消息
-        processed_parts = []
-        
-        for msg_segment in message:
-            if not isinstance(msg_segment, dict):
-                continue
-                
-            msg_type = msg_segment.get("type", "")
-            
-            if msg_type == "text":
-                # 文本消息直接添加
-                text_content = msg_segment.get("data", {}).get("text", "")
-                if text_content.strip():
-                    processed_parts.append(text_content)
-                    
-            elif msg_type == "image":
-                # 图片消息
-                processed_parts.append("[图片]")
-                
-            elif msg_type == "video":
-                # 视频消息
-                processed_parts.append("[视频]")
-                
-            elif msg_type == "record":
-                # 语音消息
-                processed_parts.append("[语音]")
-                
-            elif msg_type == "face":
-                # QQ表情
-                processed_parts.append("[表情]")
-                
-            elif msg_type == "at":
-                # @某人
-                at_qq = msg_segment.get("data", {}).get("qq", "")
-                if at_qq == "all":
-                    processed_parts.append("@全体成员")
-                else:
-                    processed_parts.append(f"@{at_qq}")
-                    
-            elif msg_type == "reply":
-                # 回复消息
-                processed_parts.append("[回复]")
-                
-            elif msg_type == "forward":
-                # 转发消息
-                processed_parts.append("[转发]")
-                
-            elif msg_type == "file":
-                # 文件
-                processed_parts.append("[文件]")
-                
-            elif msg_type == "share":
-                # 分享链接
-                processed_parts.append("[分享]")
-                
-            elif msg_type == "location":
-                # 位置分享
-                processed_parts.append("[位置]")
-                
-            elif msg_type == "music":
-                # 音乐分享
-                processed_parts.append("[音乐]")
-                
-            elif msg_type == "xml" or msg_type == "json":
-                # 卡片消息
-                processed_parts.append("[卡片]")
-                
-            else:
-                # 其他未知类型
-                processed_parts.append("[非文本]")
-        
-        if processed_parts:
-            return "".join(processed_parts)
-    
-    # 如果结构化消息处理失败或为空，则处理CQ码格式
     if raw_message:
         # 使用正则表达式解析CQ码
         def replace_cq_code(match):
@@ -420,102 +340,6 @@ async def handle_message(ws, data: dict):
             except Exception as e:
                 _plugin_instance.logger.error(f"获取玩家列表时出错: {e}")
                 reply = f"获取玩家列表失败: {e}"
-        else:
-            reply = "插件未正确初始化"
-
-    elif cmd == "version" and len(cmd_parts) == 1:
-        if _plugin_instance:
-            server_version = _plugin_instance.server.version
-            minecraft_version = _plugin_instance.server.minecraft_version
-            reply = f"服务器版本信息：\nEndstone: {server_version}\nMinecraft: {minecraft_version}"
-        else:
-            reply = "插件未正确初始化"
-
-    elif cmd == "plugins" and len(cmd_parts) == 1:
-        if _plugin_instance:
-            try:
-                all_plugins = _plugin_instance.server.plugin_manager.plugins
-                plugin_info_list = []
-                for plugin in all_plugins:
-                    if plugin:
-                        try:
-                            # 首先尝试使用 PluginDescription（如果存在）
-                            desc = plugin.description
-                            if desc is not None:
-                                plugin_name = desc.name if hasattr(desc, 'name') and desc.name else None
-                                plugin_desc = desc.description if hasattr(desc, 'description') and desc.description else None
-                                plugin_version = desc.version if hasattr(desc, 'version') and desc.version else None
-                                
-                                # 获取作者信息 - authors 是字符串列表
-                                authors_str = None
-                                if hasattr(desc, 'authors') and desc.authors:
-                                    if isinstance(desc.authors, list):
-                                        authors_str = ", ".join(desc.authors)
-                                    elif isinstance(desc.authors, str):
-                                        authors_str = desc.authors
-                                
-                                # 获取网站信息（可选）
-                                website = ""
-                                if hasattr(desc, 'website') and desc.website:
-                                    website = f"\n   🌐 网站: {desc.website}"
-                                
-                                # 如果有完整信息，格式化详细插件信息
-                                if plugin_name and plugin_desc and plugin_version and authors_str:
-                                    plugin_info = f"📦 {plugin_name} v{plugin_version}\n   📝 {plugin_desc}\n   👤 作者: {authors_str}{website}"
-                                    plugin_info_list.append(plugin_info)
-                                else:
-                                    # 信息不完整，降级到简单格式
-                                    if plugin_name:
-                                        plugin_info_list.append(f"📦 {plugin_name}")
-                                    else:
-                                        raise Exception("无法获取插件名称")
-                            else:
-                                # description 为 None，使用 Plugin 类的属性
-                                plugin_name = plugin.name if hasattr(plugin, 'name') and plugin.name else None
-                                plugin_version = plugin.version if hasattr(plugin, 'version') and plugin.version else None
-                                plugin_desc = plugin.description if hasattr(plugin, 'description') and plugin.description else None
-                                
-                                # 获取作者信息
-                                authors_str = None
-                                if hasattr(plugin, 'authors') and plugin.authors:
-                                    if isinstance(plugin.authors, list):
-                                        authors_str = ", ".join(plugin.authors)
-                                    elif isinstance(plugin.authors, str):
-                                        authors_str = plugin.authors
-                                
-                                # 获取网站信息
-                                website = ""
-                                if hasattr(plugin, 'website') and plugin.website:
-                                    website = f"\n   🌐 网站: {plugin.website}"
-                                
-                                # 如果有完整信息，格式化详细插件信息
-                                if plugin_name and plugin_desc and plugin_version and authors_str:
-                                    plugin_info = f"📦 {plugin_name} v{plugin_version}\n   📝 {plugin_desc}\n   👤 作者: {authors_str}{website}"
-                                    plugin_info_list.append(plugin_info)
-                                elif plugin_name:
-                                    # 只有名称，使用简单格式
-                                    plugin_info_list.append(f"📦 {plugin_name}")
-                                else:
-                                    # 使用类名作为备用方案
-                                    raise Exception("无法获取插件名称")
-                            
-                        except Exception as e:
-                            # 降级到基本信息 - 只显示类名
-                            try:
-                                plugin_name = plugin.__class__.__name__
-                                if plugin_name.endswith('Plugin'):
-                                    plugin_name = plugin_name[:-6]
-                                plugin_info_list.append(f"📦 {plugin_name}")
-                            except:
-                                plugin_info_list.append("📦 未知插件")
-                
-                if plugin_info_list:
-                    reply = f"已加载插件 ({len(plugin_info_list)})：\n\n" + "\n\n".join(plugin_info_list)
-                else:
-                    reply = "没有加载任何插件"
-            except Exception as e:
-                _plugin_instance.logger.error(f"获取插件列表时出错: {e}")
-                reply = f"获取插件列表失败: {e}"
         else:
             reply = "插件未正确初始化"
 

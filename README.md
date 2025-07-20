@@ -31,7 +31,7 @@ bedrock_server/plugins/qqsync_plugin/config.json
 ```json
 {
   "napcat_ws": "ws://localhost:3001",     // NapCat WebSocket服务器 地址（正向WS）
-  "access_token": "your_token_here",     // 访问令牌（可选）
+  "access_token": "",     // 访问令牌（可选）
   "target_group": 712523104,             // 目标QQ群号
   "admins": ["2899659758"],              // 管理员QQ号列表
   "enable_qq_to_game": true,             // QQ消息转发到游戏
@@ -49,8 +49,6 @@ bedrock_server/plugins/qqsync_plugin/config.json
 #### � 查询命令（所有用户可用）
 - `/help` - 显示本帮助信息
 - `/list` - 查看在线玩家列表
-- `/version` - 查看服务器版本信息
-- `/plugins` - 查看已加载的插件列表
 - `/tps` - 查看服务器性能指标（TPS等）
 - `/info` - 查看服务器综合信息
 
