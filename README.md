@@ -3,7 +3,7 @@
 一个简易的 Minecraft 服务器与 QQ 群聊双向互通插件，基于 Endstone 插件框架开发。
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/pythosvg
+![Python](https://img.shields.io/badge/pythosvg)
 ![Endstone](https://img.shields.io/badge/endstone-0.6-orange.svg)
 
 ## ✨ 核心功能
@@ -17,14 +17,14 @@
 - 👮 **访客权限管理**：未绑定QQ的玩家受访客权限限制
 - 🚫 **玩家封禁系统**：支持封禁玩家并禁止QQ绑定
 - 👥 **群成员监控**：自动检测玩家退群并调整权限
-- 🎯 **攻击限制保护**：多层次防护，阻止访客恶意行为
+- 🎯 **访客限制保护**：多层次防护，阻止访客恶意行为
 
 ## 🚀 快速开始
 
 ### 1. 安装
 将插件放到 Endstone 服务器插件目录：
 ```
-bedrock_server/plugins/endstone_qqsync_plugin-0.0.1-py2.py3-none-any.whl
+bedrock_server/plugins/endstone_qqsync_plugin-0.0.4-py2.py3-none-any.whl
 ```
 
 ### 2. 配置
