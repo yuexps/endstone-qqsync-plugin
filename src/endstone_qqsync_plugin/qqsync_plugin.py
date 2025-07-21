@@ -14,8 +14,11 @@ from endstone.event import (
 )
 from endstone.form import (
     ModalForm,
+    MessageForm,
     Label,
     TextInput,
+    Header,
+    Divider,
 )
 
 import asyncio
@@ -36,6 +39,7 @@ _plugin_instance = None
 # QQ绑定相关的全局变量
 _pending_verifications = {}  # 存储待验证的信息: {player_name: {"qq": qq_number, "code": verification_code, "timestamp": time}}
 _verification_codes = {}     # 存储验证码: {qq_number: {"code": code, "timestamp": time, "player_name": name}}
+_verification_messages = {}  # 存储验证码消息ID: {qq_number: {"message_id": id, "timestamp": time, "player_name": name}}
 
 class qqsync(Plugin):
 
@@ -61,7 +65,7 @@ class qqsync(Plugin):
     
     def on_load(self) -> None:
         self.logger.info(f"{ColorFormat.BLUE}qqsync_plugin {ColorFormat.WHITE}正在加载...{ColorFormat.RESET}")
-    
+
     def on_enable(self) -> None:
         global _plugin_instance
         _plugin_instance = self
@@ -78,13 +82,13 @@ class qqsync(Plugin):
         # 初始化日志缓存（避免重复日志输出）
         self._logged_left_players = set()  # 存储已记录退群日志的QQ号
         
-        # 初始化文件写入优化
+        # 初始化文件写入
         self._pending_data_save = False  # 是否有待保存的数据
         self._last_save_time = 0  # 上次保存时间
         self._save_interval = 0.02  # 保存间隔（20毫秒）
         self._force_save_interval = 0.1  # 强制保存间隔（100毫秒）
         
-        # 实时保存优化
+        # 实时保存
         self._auto_save_enabled = True  # 是否启用自动保存
         self._save_on_change = True  # 数据变更时立即保存
         self._max_pending_changes = 5  # 最大待保存变更数量
@@ -98,12 +102,19 @@ class qqsync(Plugin):
         self._pending_qq_confirmations = {}  # 待确认的QQ信息：{player_name: {qq: str, nickname: str, timestamp: float}}
         self._concurrent_bindings = set()  # 当前正在进行绑定的玩家
         self._max_concurrent_bindings = 25  # 最大并发绑定数量
-        self._verification_rate_limit = 15  # 每分钟最多发送验证码数量
-        self._binding_cooldown = 15  # 绑定失败后的冷却时间（秒）（减少等待时间）
+        self._verification_rate_limit = 30  # 每分钟最多发送验证码数量（提高到30个）
+        self._binding_cooldown = 10  # 绑定失败后的冷却时间（秒）（减少到10秒）
         
-        # 40人服务器专用：智能队列管理
+        # 队列管理
         self._binding_queue = []  # 绑定队列：[(player_name, qq_number, request_time)]
         self._queue_notification_sent = set()  # 已发送排队通知的玩家
+        
+        # 多人验证码发送
+        self._verification_send_queue = []  # 验证码发送队列：[(player, qq_number, verification_code, attempt, timestamp)]
+        self._verification_retry_count = {}  # 验证码重试计数：{qq_number: retry_count}
+        self._max_verification_retries = 3  # 最大重试次数
+        self._verification_send_interval = 2  # 验证码发送间隔（秒）
+        self._last_verification_send_time = 0  # 上次验证码发送时间
 
         #注册事件
         self.register_events(self)
@@ -119,23 +130,28 @@ class qqsync(Plugin):
         future = asyncio.run_coroutine_threadsafe(connect_forever(), self._loop)
         self._task = future
 
-        # 启动定时清理任务（每5分钟执行一次）
+        # 启动数据一致性检查任务
+        if hasattr(self, '_loop'):
+            # 创建定期数据一致性检查任务（每30秒）
+            self._loop.call_later(30, self._schedule_consistency_check)
+
+        # 启动定时清理任务
         self.server.scheduler.run_task(
             self,
             self._schedule_cleanup,
-            delay=6000,  # 首次执行延迟5分钟
-            period=6000  # 每5分钟执行一次
+            delay=1200,  # 首次执行延迟1分钟
+            period=1200  # 每1分钟执行一次
         )
         
-        # 启动群成员检查任务（更早开始，每10分钟执行一次）
+        # 启动群成员检查任务（等待WebSocket连接建立后开始，每10分钟执行一次）
         self.server.scheduler.run_task(
             self,
             self._schedule_group_check,
-            delay=200,   # 首次执行延迟10秒，更早获取群成员列表
+            delay=300,   # 首次执行延迟15秒，确保WebSocket连接已建立
             period=12000  # 每10分钟执行一次
         )
 
-        # 启动周期性清理任务（多玩家优化）
+        # 启动周期性清理任务
         self.server.scheduler.run_task(
             self,
             self._schedule_multi_player_cleanup,
@@ -150,12 +166,41 @@ class qqsync(Plugin):
             delay=5,     # 5秒后首次执行
             period=20    # 每1秒检查一次队列
         )
+        
+        # 启动验证码发送队列处理任务
+        self.server.scheduler.run_task(
+            self,
+            self._process_verification_send_queue,
+            delay=3,     # 3秒后首次执行
+            period=40    # 每2秒检查一次验证码发送队列
+        )
+        
+        # 启动验证码专用清理任务（高频清理确保及时撤回）
+        self.server.scheduler.run_task(
+            self,
+            self.cleanup_expired_verifications,
+            delay=600,   # 30秒后首次执行
+            period=600   # 每30秒检查一次过期验证码
+        )
 
         startup_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已启用{ColorFormat.RESET}"
         self.logger.info(startup_msg)
         welcome_msg = f"{ColorFormat.BLUE}欢迎使用QQsync群服互通插件，{ColorFormat.YELLOW}作者：yuexps{ColorFormat.RESET}"
         self.logger.info(welcome_msg)
-        
+
+    def _schedule_consistency_check(self):
+        """安排数据一致性检查任务"""
+        try:
+            # 创建一致性检查任务
+            asyncio.run_coroutine_threadsafe(_verify_data_consistency(), self._loop)
+            
+            # 安排下一次检查（30秒后）
+            self._loop.call_later(30, self._schedule_consistency_check)
+        except Exception as e:
+            self.logger.error(f"安排数据一致性检查失败: {e}")
+            # 尝试5分钟后重新安排
+            self._loop.call_later(300, self._schedule_consistency_check)   
+    
     def _init_config(self):
         """初始化配置文件"""
         # 配置文件路径
@@ -456,7 +501,6 @@ class qqsync(Plugin):
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法破坏/放置方块{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法与容器/机器交互{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法攻击生物或实体{ColorFormat.RESET}")
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}其他插件功能不受影响{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}如有疑问请联系管理员{ColorFormat.RESET}")
             elif visitor_reason == "未绑定QQ":
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}[警告] 您当前为访客权限（原因：未绑定QQ）{ColorFormat.RESET}")
@@ -465,7 +509,6 @@ class qqsync(Plugin):
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法破坏/放置方块{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法与容器/机器交互{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法攻击生物或实体{ColorFormat.RESET}")
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}其他插件功能不受影响{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}解决方案：使用命令 /bindqq 绑定QQ{ColorFormat.RESET}")
             elif visitor_reason == "已退出QQ群":
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}[警告] 您当前为访客权限（原因：已退出QQ群）{ColorFormat.RESET}")
@@ -474,7 +517,6 @@ class qqsync(Plugin):
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法破坏/放置方块{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法与容器/机器交互{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法攻击生物或实体{ColorFormat.RESET}")
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}其他插件功能不受影响{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}解决方案：重新加入QQ群后权限将自动恢复{ColorFormat.RESET}")
                 
                 # 显示QQ群信息
@@ -525,6 +567,21 @@ class qqsync(Plugin):
             if hasattr(self, '_queue_notification_sent') and player_name in self._queue_notification_sent:
                 self._queue_notification_sent.discard(player_name)
                 cache_cleaned.append("队列通知缓存")
+            
+            # 清理验证码发送队列
+            if hasattr(self, '_verification_send_queue'):
+                original_verification_queue_length = len(self._verification_send_queue)
+                self._verification_send_queue = [(p, q, c, a, t) for p, q, c, a, t in self._verification_send_queue if p.name != player_name]
+                if len(self._verification_send_queue) < original_verification_queue_length:
+                    cache_cleaned.append("验证码发送队列")
+            
+            # 清理验证码重试计数
+            if hasattr(self, '_verification_retry_count'):
+                # 查找该玩家相关的QQ号
+                player_qq = self.get_player_qq(player_name)
+                if player_qq and player_qq in self._verification_retry_count:
+                    del self._verification_retry_count[player_qq]
+                    cache_cleaned.append("验证码重试计数")
             
             # 清理待验证数据（如果玩家在验证过程中离线）
             global _pending_verifications
@@ -604,16 +661,38 @@ class qqsync(Plugin):
                 self.get_config("check_group_member", True)):
             return
             
-        if _current_ws:
+        if self._is_websocket_connected():
             target_group = self.get_config("target_group")
             asyncio.run_coroutine_threadsafe(
                 get_group_member_list(_current_ws, target_group),
                 self._loop
             )
         else:
-            self.logger.warning("WebSocket未连接，无法更新群成员缓存")
+            # 使用新的状态消息方法
+            status_msg = self._get_websocket_status_message("群成员缓存更新")
+            if status_msg:
+                # 只在首次启动时使用debug级别，运行中断开时使用warning级别
+                if not hasattr(self, '_group_members') or len(self._group_members) == 0:
+                    self.logger.debug(status_msg)
+                else:
+                    self.logger.warning(status_msg)
             # 如果WebSocket断开，暂时不进行退群检测
             # 避免因网络问题误判退群
+    
+    def _is_websocket_connected(self) -> bool:
+        """检查WebSocket是否已连接"""
+        return _current_ws is not None
+    
+    def _get_websocket_status_message(self, operation: str = "操作") -> str:
+        """获取WebSocket状态相关的用户友好消息"""
+        if self._is_websocket_connected():
+            return ""
+        
+        # 检查是否是首次启动阶段
+        if not hasattr(self, '_group_members') or len(self._group_members) == 0:
+            return f"系统正在连接QQ服务，{operation}稍后将自动执行"
+        else:
+            return f"QQ服务连接断开，{operation}暂时不可用"
     
     def check_qq_in_group_immediate(self, qq_number: str) -> bool:
         """立即检查QQ号是否在群内（通过API实时查询）"""
@@ -622,8 +701,10 @@ class qqsync(Plugin):
                 self.get_config("check_group_member", True)):
             return True  # 如果未启用相关功能，默认允许
             
-        if not _current_ws:
-            self.logger.warning("WebSocket未连接，无法实时检查群成员")
+        if not self._is_websocket_connected():
+            status_msg = self._get_websocket_status_message("群成员检查")
+            if status_msg:
+                self.logger.debug(f"QQ {qq_number} 群成员检查跳过: {status_msg}")
             return True  # 连接断开时默认允许
         
         try:
@@ -1260,40 +1341,38 @@ class qqsync(Plugin):
     def show_qq_binding_form(self, player):
         """显示QQ绑定表单"""
         try:
-            # 多玩家优化：检查是否可以显示绑定表单（每个玩家最多3次机会）
-            if not self._can_show_form(player.name):
-                # 检查是否已达到最大显示次数
-                display_count = self._form_display_count.get(player.name, 0)
-                if display_count >= 3:
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}绑定表单显示次数已达上限(3次)，请使用命令 /bindqq 进行绑定{ColorFormat.RESET}")
-                else:
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}绑定表单显示过于频繁，请稍后再试{ColorFormat.RESET}")
-                return
-            
-            # 根据是否启用强制绑定显示不同的提示信息
+            # 根据是否启用强制绑定显示不同的内容
             if self.get_config("force_bind_qq", True):
-                form_labels = [
-                    Label("欢迎来到服务器！"),
-                    Label("为了更好的游戏体验，请绑定您的QQ号。"),
-                    Label("绑定后可以与QQ群聊天互通。")
+                controls = [
+                    Divider(),
+                    Label("为了更好的游戏体验，请绑定您的QQ号"),
+                    Label("绑定后可以与QQ群聊天互通"),
+                    Label("享受群服一体化体验"),
+                    Divider(),
                 ]
             else:
-                form_labels = [
-                    Label("QQ群服互通 - 可选绑定"),
-                    Label("绑定QQ号后可享受群服互通功能。"),
-                    Label("您也可以选择不绑定，不影响正常游戏。")
+                controls = [
+                    Header("QQ群服互通 - 可选绑定"),
+                    Divider(),
+                    Label("绑定QQ号后可享受群服互通功能"),
+                    Label("您也可以选择不绑定，不影响正常游戏"),
+                    Divider(),
                 ]
+            
+            # 添加输入框
+            controls.append(
+                TextInput(
+                    label="请输入您的QQ号",
+                    placeholder="例如: 2899659758 (5-11位数字)",
+                    default_value=""
+                )
+            )
             
             form = ModalForm(
                 title="QQsync群服互通 - 身份验证",
-                controls=form_labels + [
-                    TextInput(
-                        label="请输入您的QQ号",
-                        placeholder="例如: 2899659758",
-                        default_value=""
-                    )
-                ],
-                submit_button="下一步"
+                controls=controls,
+                submit_button="下一步",
+                icon="textures/ui/icon_multiplayer"
             )
             
             form.on_submit = lambda player, form_data: self._handle_qq_form_submit(player, form_data)
@@ -1313,14 +1392,22 @@ class qqsync(Plugin):
         global _pending_verifications, _verification_codes
         
         try:
+            # 添加调试信息
+            self.logger.debug(f"收到表单数据: {form_data}")
+            
             try:
                 # 尝试解析JSON格式
                 data_list = json.loads(form_data)
-                qq_input = data_list[3] if len(data_list) > 3 else ""
+                self.logger.debug(f"解析后的数据列表长度: {len(data_list)}, 内容: {data_list}")
+                # TextInput总是在表单控件的最后位置，从末尾获取
+                qq_input = data_list[-1] if len(data_list) > 0 else ""
             except (json.JSONDecodeError, IndexError):
                 # 如果不是JSON，按逗号分割或其他方式解析
                 data_parts = form_data.split(',') if form_data else []
-                qq_input = data_parts[3].strip() if len(data_parts) > 3 else ""
+                self.logger.debug(f"按逗号分割的数据长度: {len(data_parts)}, 内容: {data_parts}")
+                qq_input = data_parts[-1].strip() if len(data_parts) > 0 else ""
+            
+            self.logger.debug(f"提取的QQ号: '{qq_input}'")
             
             if not qq_input or not qq_input.isdigit():
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}请输入有效的QQ号（5-11位数字）！{ColorFormat.RESET}")
@@ -1383,7 +1470,7 @@ class qqsync(Plugin):
             # 先获取QQ昵称，然后显示确认表单
             player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}正在获取QQ昵称信息...{ColorFormat.RESET}")
             
-            # 临时存储待确认的QQ信息（简化版本）
+            # 临时存储待确认的QQ信息
             self._pending_qq_confirmations[player.name] = {
                 "qq": qq_input,
                 "nickname": "获取中...",
@@ -1449,23 +1536,27 @@ class qqsync(Plugin):
     def _show_qq_confirmation_form(self, player, qq_number, nickname):
         """显示QQ信息确认表单"""
         try:
-            form = ModalForm(
+            # 格式化显示内容
+            content = f"""请确认以下QQ账号信息是否正确：
+
+QQ号: {qq_number}
+昵称: {nickname}"""
+            
+            form = MessageForm(
                 title="确认QQ账号信息",
-                controls=[
-                    Label("请确认以下QQ账号信息是否正确："),
-                    Label(""),
-                    Label(f"QQ号: {qq_number}"),
-                    Label(f"昵称: {nickname}"),
-                    Label(""),
-                    Label("如果信息正确，点击'确认'继续绑定；"),
-                    Label("如果信息错误，点击'取消'重新输入。")
-                ],
-                submit_button="确认绑定",
-                cancel_button="取消"
+                content=content,
+                button1="确认绑定",
+                button2="重新输入"
             )
             
-            # 简化处理：直接传递QQ号和昵称
-            form.on_submit = lambda player, form_data: self._handle_qq_confirmation(player, True, qq_number, nickname)
+            # MessageForm 的 on_submit 回调函数接收按钮索引：0=button1, 1=button2
+            def handle_submit(player, button_index):
+                if button_index == 0:  # 确认绑定
+                    self._handle_qq_confirmation(player, True, qq_number, nickname)
+                else:  # 重新输入
+                    self._handle_qq_confirmation(player, False, qq_number, nickname)
+            
+            form.on_submit = handle_submit
             form.on_close = lambda player: self._handle_qq_confirmation(player, False, qq_number, nickname)
             
             player.send_form(form)
@@ -1505,16 +1596,25 @@ class qqsync(Plugin):
             # 生成验证码
             verification_code = str(random.randint(100000, 999999))
             
-            # 存储待验证信息（不需要存储昵称）
+            # 控制台显示验证码（管理员调试用）
+            console_msg = f"{ColorFormat.AQUA}[验证码] 玩家: {ColorFormat.WHITE}{player.name}{ColorFormat.AQUA} | QQ: {ColorFormat.WHITE}{qq_number}{ColorFormat.AQUA} | 验证码: {ColorFormat.YELLOW}{verification_code}{ColorFormat.RESET}"
+            self.logger.info(console_msg)
+            print(f"[QQsync验证码生成] {player.name} -> QQ: {qq_number} 验证码: {verification_code}")
+            
+            # 存储待验证信息（包含验证码创建时间和玩家XUID）
+            creation_time = datetime.datetime.now()
             _pending_verifications[player.name] = {
                 "qq": qq_number,
                 "code": verification_code,
-                "timestamp": time.time()
+                "timestamp": time.time(),
+                "creation_time": creation_time,  # 精确时间记录
+                "player_xuid": player.xuid  # 玩家XUID用于安全验证
             }
             
             _verification_codes[qq_number] = {
                 "code": verification_code,
                 "timestamp": time.time(),
+                "creation_time": creation_time,  # 精确时间记录
                 "player_name": player.name
             }
             
@@ -1525,24 +1625,25 @@ class qqsync(Plugin):
                     current_concurrent = len(self._concurrent_bindings)
                     queue_length = len(self._binding_queue)
                     
-                    # 发送验证码消息（包含昵称用于确认）
-                    verification_text = f"🎮 QQsync-群服互通 绑定验证\n\n玩家名: {player.name}\n验证码: {verification_code}\n\n✅ 请在游戏中输入此验证码完成绑定\n📱 或QQ群输入: /verify {verification_code}\n⏰ 验证码5分钟内有效\n\n📊 系统状态: {current_concurrent}/{self._max_concurrent_bindings} 并发 | {queue_length} 排队"
+                    # 将验证码发送添加到队列，而不是直接发送
+                    self._verification_send_queue.append((
+                        player, 
+                        qq_number, 
+                        verification_code, 
+                        1,  # 初始尝试次数
+                        time.time()
+                    ))
                     
-                    asyncio.run_coroutine_threadsafe(
-                        send_private_msg(_current_ws, user_id=int(qq_number), text=verification_text),
-                        self._loop
-                    )
-                    
-                    # 通知玩家验证码已发送
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}验证码已发送到QQ {qq_number} ({nickname})！{ColorFormat.RESET}")
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请检查QQ私聊消息{ColorFormat.RESET}")
+                    # 通知玩家验证码发送中
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}正在发送验证码到群组@您...{ColorFormat.RESET}")
                     player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}当前绑定队列：{len(self._concurrent_bindings)}/{self._max_concurrent_bindings}{ColorFormat.RESET}")
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}验证码发送队列：{len(self._verification_send_queue)}个等待中{ColorFormat.RESET}")
                     
-                    # 延迟显示验证码输入表单
+                    # 立即尝试处理验证码发送队列
                     self.server.scheduler.run_task(
                         self,
-                        lambda: self.show_verification_form(player),
-                        delay=20  # 1秒延迟
+                        self._process_verification_send_queue,
+                        delay=1
                     )
                     
                 except Exception as e:
@@ -1556,7 +1657,7 @@ class qqsync(Plugin):
                         del _verification_codes[qq_number]
                     return
             else:
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}服务器未连接到QQ，无法发送验证码！{ColorFormat.RESET}")
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}服务器未连接到QQ群，无法发送验证码！{ColorFormat.RESET}")
                 self._unregister_verification_attempt(qq_number, player.name, False)
                 return
             
@@ -1570,16 +1671,19 @@ class qqsync(Plugin):
             form = ModalForm(
                 title="QQ验证码确认",
                 controls=[
-                    Label("验证码已发送到您的QQ！"),
-                    Label("请检查QQ私聊消息并输入收到的验证码。"),
-                    Label("验证码5分钟内有效。"),
+                    Divider(),
+                    Label("验证码已通过群组@消息发送！"),
+                    Label("请查看QQ群消息并输入收到的验证码"),
+                    Label("验证码60秒内有效"),
+                    Divider(),
                     TextInput(
-                        label="验证码",
-                        placeholder="请输入6位验证码",
+                        label="请输入验证码",
+                        placeholder="6位数字验证码",
                         default_value=""
                     )
                 ],
-                submit_button="确认绑定"
+                submit_button="确认绑定",
+                icon="textures/ui/icon_book_writable"
             )
             
             form.on_submit = lambda player, form_data: self._handle_verification_submit(player, form_data)
@@ -1608,23 +1712,50 @@ class qqsync(Plugin):
         global _pending_verifications, _verification_codes
         
         try:
-            # 首先检查验证表单状态
-            can_verify, error_msg = self._can_show_verification_form(player.name)
-            if not can_verify:
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{error_msg}{ColorFormat.RESET}")
-                if "过期" in error_msg:
-                    self._cleanup_expired_verification(player.name)
+            # 首先检查是否有待验证的信息
+            if player.name not in _pending_verifications:
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}验证信息已过期，请重新开始绑定{ColorFormat.RESET}")
+                return
+            
+            # 安全检查：验证XUID是否匹配（防止不同玩家冒用验证码）
+            pending_info = _pending_verifications[player.name]
+            if pending_info.get("player_xuid") and pending_info.get("player_xuid") != player.xuid:
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}验证失败：玩家身份不匹配，请重新开始绑定{ColorFormat.RESET}")
+                self.logger.warning(f"游戏内验证安全检查失败: 玩家 {player.name} XUID不匹配 - 期望: {pending_info.get('player_xuid')}, 实际: {player.xuid}")
+                # 清理验证数据
+                del _pending_verifications[player.name]
+                qq_number = pending_info.get("qq")
+                if qq_number and qq_number in _verification_codes:
+                    del _verification_codes[qq_number]
+                return
+            
+            # 检查验证码是否过期（60秒有效期）
+            current_time = time.time()
+            if current_time - pending_info["timestamp"] > 60:  # 60秒
+                # 清理过期的验证信息
+                del _pending_verifications[player.name]
+                qq_number = pending_info["qq"]
+                if qq_number in _verification_codes:
+                    del _verification_codes[qq_number]
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}验证码已过期，请重新开始绑定{ColorFormat.RESET}")
                 return
             
             # 解析form_data获取验证码
+            self.logger.debug(f"收到验证码表单数据: {form_data}")
+            
             try:
                 # 尝试解析JSON格式
                 data_list = json.loads(form_data)
-                verification_input = data_list[3] if len(data_list) > 3 else ""
+                self.logger.debug(f"验证码表单解析后的数据列表长度: {len(data_list)}, 内容: {data_list}")
+                # TextInput总是在表单控件的最后位置，从末尾获取
+                verification_input = data_list[-1] if len(data_list) > 0 else ""
             except (json.JSONDecodeError, IndexError):
                 # 如果不是JSON，按逗号分割或其他方式解析
                 data_parts = form_data.split(',') if form_data else []
-                verification_input = data_parts[3].strip() if len(data_parts) > 3 else ""
+                self.logger.debug(f"验证码表单按逗号分割的数据长度: {len(data_parts)}, 内容: {data_parts}")
+                verification_input = data_parts[-1].strip() if len(data_parts) > 0 else ""
+            
+            self.logger.debug(f"提取的验证码: '{verification_input}'")
             
             # 验证码格式检查
             if not verification_input or not verification_input.isdigit() or len(verification_input) != 6:
@@ -1637,11 +1768,35 @@ class qqsync(Plugin):
                 )
                 return
             
-            # 获取待验证信息
-            pending_info = _pending_verifications[player.name]
-            
             # 验证验证码
             if verification_input == pending_info["code"]:
+                # 检查验证码是否已被使用
+                qq_number = pending_info["qq"]
+                if qq_number in _verification_codes and _verification_codes[qq_number].get("used", False):
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}验证码已使用：该验证码已被使用过，请重新申请绑定{ColorFormat.RESET}")
+                    self.logger.warning(f"游戏内验证失败: 验证码已被使用 (玩家: {player.name}, QQ: {qq_number})")
+                    # 清理验证数据
+                    del _pending_verifications[player.name]
+                    if qq_number in _verification_codes:
+                        del _verification_codes[qq_number]
+                    return
+                
+                # 控制台显示游戏内验证成功信息
+                game_verify_success_msg = f"{ColorFormat.GREEN}[游戏内验证成功] 玩家: {ColorFormat.WHITE}{player.name}{ColorFormat.GREEN} | QQ: {ColorFormat.WHITE}{pending_info['qq']}{ColorFormat.GREEN} | 验证码: {ColorFormat.YELLOW}{verification_input}{ColorFormat.GREEN} | 来源: 游戏表单{ColorFormat.RESET}"
+                self.logger.info(game_verify_success_msg)
+                print(f"[QQsync游戏内验证成功] {player.name} ({pending_info['qq']}) 验证码: {verification_input} - 来源: 游戏表单")
+                
+                # 标记验证码为已使用（防止重复使用）
+                qq_number = pending_info["qq"]
+                if qq_number in _verification_codes:
+                    _verification_codes[qq_number]["used"] = True
+                    _verification_codes[qq_number]["use_time"] = time.time()
+                
+                # 清理游戏内验证尝试计数器
+                attempts_key = f"game_verify_attempts_{player.name}"
+                if hasattr(self, '_game_verification_attempts') and attempts_key in self._game_verification_attempts:
+                    del self._game_verification_attempts[attempts_key]
+                
                 # 绑定成功
                 self.bind_player_qq(player.name, player.xuid, pending_info["qq"])
                 
@@ -1649,6 +1804,13 @@ class qqsync(Plugin):
                 del _pending_verifications[player.name]
                 if pending_info["qq"] in _verification_codes:
                     del _verification_codes[pending_info["qq"]]
+                
+                # 撤回验证码消息
+                if _current_ws:
+                    asyncio.run_coroutine_threadsafe(
+                        delete_verification_message(pending_info["qq"]),
+                        self._loop
+                    )
                 
                 # 发送成功消息
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}[成功] QQ绑定成功！{ColorFormat.RESET}")
@@ -1685,13 +1847,57 @@ class qqsync(Plugin):
                         self._loop
                     )
             else:
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}验证码错误，请重试！{ColorFormat.RESET}")
-                # 重新显示验证表单
-                self.server.scheduler.run_task(
-                    self,
-                    lambda: self.show_verification_form(player),
-                    delay=10
-                )
+                # 游戏内验证失败处理：给玩家多次重试机会
+                attempts_key = f"game_verify_attempts_{player.name}"
+                current_attempts = getattr(self, '_game_verification_attempts', {}).get(attempts_key, 0) + 1
+                
+                # 初始化游戏内验证尝试计数器
+                if not hasattr(self, '_game_verification_attempts'):
+                    self._game_verification_attempts = {}
+                self._game_verification_attempts[attempts_key] = current_attempts
+                
+                max_attempts = 3  # 游戏内允许更多尝试次数（3次）
+                remaining_attempts = max_attempts - current_attempts
+                
+                if remaining_attempts > 0:
+                    # 还有重试机会
+                    # 控制台显示游戏内验证失败信息
+                    game_verify_fail_msg = f"{ColorFormat.RED}[游戏内验证失败] 玩家: {ColorFormat.WHITE}{player.name}{ColorFormat.RED} | QQ: {ColorFormat.WHITE}{pending_info['qq']}{ColorFormat.RED} | 输入验证码: {ColorFormat.YELLOW}{verification_input}{ColorFormat.RED} | 正确验证码: {ColorFormat.YELLOW}{pending_info['code']}{ColorFormat.RED} | 剩余尝试: {ColorFormat.YELLOW}{remaining_attempts}{ColorFormat.RED} | 来源: 游戏表单{ColorFormat.RESET}"
+                    self.logger.info(game_verify_fail_msg)
+                    print(f"[QQsync游戏内验证失败] {player.name} ({pending_info['qq']}) 输入: {verification_input} 正确: {pending_info['code']} 剩余: {remaining_attempts} - 来源: 游戏表单")
+                    
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}验证码错误！还可以尝试 {remaining_attempts} 次{ColorFormat.RESET}")
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请仔细检查验证码后重新输入{ColorFormat.RESET}")
+                    
+                    # 重新显示验证表单
+                    self.server.scheduler.run_task(
+                        self,
+                        lambda: self.show_verification_form(player),
+                        delay=10
+                    )
+                else:
+                    # 尝试次数用完，清理验证数据并要求重新申请
+                    self.logger.warning(f"游戏内验证尝试次数超限: 玩家 {player.name} 已尝试 {max_attempts} 次，清理验证数据")
+                    
+                    # 清理验证数据
+                    del _pending_verifications[player.name]
+                    qq_number = pending_info["qq"]
+                    if qq_number in _verification_codes:
+                        del _verification_codes[qq_number]
+                    
+                    # 撤回验证码消息
+                    if _current_ws:
+                        asyncio.run_coroutine_threadsafe(
+                            delete_verification_message(qq_number),
+                            self._loop
+                        )
+                    
+                    # 清理尝试计数
+                    if attempts_key in self._game_verification_attempts:
+                        del self._game_verification_attempts[attempts_key]
+                    
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}验证码尝试次数已达上限（{max_attempts}次）{ColorFormat.RESET}")
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请重新使用命令 /bindqq 申请新的验证码{ColorFormat.RESET}")
             
         except Exception as e:
             self.logger.error(f"处理验证码提交失败: {e}")
@@ -1699,7 +1905,7 @@ class qqsync(Plugin):
     
     def cleanup_expired_verifications(self):
         """清理过期的验证码"""
-        global _pending_verifications, _verification_codes
+        global _pending_verifications, _verification_codes, _verification_messages
         
         current_time = time.time()
         expired_players = []
@@ -1707,22 +1913,39 @@ class qqsync(Plugin):
         
         # 清理过期的待验证信息
         for player_name, info in _pending_verifications.items():
-            if current_time - info["timestamp"] > 300:  # 5分钟过期
+            if current_time - info["timestamp"] > 60:  # 60秒过期
                 expired_players.append(player_name)
         
         for player_name in expired_players:
             del _pending_verifications[player_name]
         
-        # 清理过期的验证码
+        # 清理过期的验证码并撤回消息
         for qq_number, info in _verification_codes.items():
-            if current_time - info["timestamp"] > 300:  # 5分钟过期
+            if current_time - info["timestamp"] > 60:  # 60秒过期
                 expired_qq.append(qq_number)
         
         for qq_number in expired_qq:
             del _verification_codes[qq_number]
+            # 异步撤回对应的验证码消息
+            if _current_ws:
+                asyncio.run_coroutine_threadsafe(
+                    delete_verification_message(qq_number),
+                    self._loop
+                )
+            
+            # 清理对应的QQ验证尝试计数器
+            attempts_key = f"verify_attempts_{qq_number}"
+            if hasattr(self, '_verification_attempts') and attempts_key in self._verification_attempts:
+                del self._verification_attempts[attempts_key]
+        
+        # 清理过期玩家的游戏内验证尝试计数器
+        for player_name in expired_players:
+            game_attempts_key = f"game_verify_attempts_{player_name}"
+            if hasattr(self, '_game_verification_attempts') and game_attempts_key in self._game_verification_attempts:
+                del self._game_verification_attempts[game_attempts_key]
         
         if expired_players or expired_qq:
-            self.logger.info(f"清理过期验证码: {len(expired_players)} 个待验证玩家, {len(expired_qq)} 个验证码")
+            self.logger.info(f"清理过期验证码: {len(expired_players)} 个待验证玩家, {len(expired_qq)} 个验证码 (已撤回相关消息)")
         
         # 清理过期的多玩家处理缓存
         self._cleanup_expired_caches()
@@ -1743,6 +1966,24 @@ class qqsync(Plugin):
         for qq in expired_bindings:
             del self._binding_rate_limit[qq]
         
+        # 清理验证码发送队列中的过期记录（60秒过期）
+        if hasattr(self, '_verification_send_queue'):
+            original_length = len(self._verification_send_queue)
+            self._verification_send_queue = [(p, q, c, a, t) for p, q, c, a, t in self._verification_send_queue 
+                                           if current_time - t <= 60]
+            if len(self._verification_send_queue) < original_length:
+                removed_count = original_length - len(self._verification_send_queue)
+                self.logger.debug(f"清理{removed_count}个过期的验证码发送任务")
+        
+        # 清理验证码重试计数中的过期记录
+        if hasattr(self, '_verification_retry_count'):
+            # 这里我们清理那些没有对应待验证记录的重试计数
+            global _verification_codes
+            expired_retries = [qq for qq in self._verification_retry_count.keys() 
+                             if qq not in _verification_codes]
+            for qq in expired_retries:
+                del self._verification_retry_count[qq]
+        
         # 清理表单显示缓存中的过期记录或离线玩家记录
         online_player_names = {player.name for player in self.server.online_players}
         expired_forms = []
@@ -1761,6 +2002,13 @@ class qqsync(Plugin):
                                      if player_name not in online_player_names]
         for player_name in offline_concurrent_players:
             self._concurrent_bindings.discard(player_name)
+        
+        # 清理过期的验证码消息记录（60秒过期）
+        global _verification_messages
+        expired_messages = [qq for qq, msg_info in _verification_messages.items() 
+                           if current_time - msg_info["timestamp"] > 60]
+        for qq in expired_messages:
+            del _verification_messages[qq]
     
     def _can_send_verification(self, qq_number: str, player_name: str = None) -> tuple[bool, str]:
         """检查是否可以发送验证码）"""
@@ -1826,40 +2074,6 @@ class qqsync(Plugin):
         # 从并发绑定集合中移除
         self._concurrent_bindings.discard(player_name)
     
-    def _can_show_form(self, player_name: str) -> bool:
-        """检查是否可以显示绑定表单（每个玩家最多2次机会）"""
-        current_time = time.time()
-        
-        # 检查玩家是否在线，如果在线则检查冷却时间，如果离线则清理缓存并允许显示
-        player_online = any(player.name == player_name for player in self.server.online_players)
-        
-        if player_name in self._form_display_cache:
-            last_display_time = self._form_display_cache[player_name]
-            
-            # 如果玩家不在线，清理缓存记录（处理异常断线情况）
-            if not player_online:
-                del self._form_display_cache[player_name]
-                # 清理次数计数，给重新登录的玩家新的机会
-                if player_name in self._form_display_count:
-                    del self._form_display_count[player_name]
-                self.logger.debug(f"清理离线玩家 {player_name} 的表单显示缓存和计数")
-            else:
-                # 玩家在线时检查冷却时间（防止短时间内重复显示）
-                if current_time - last_display_time < 60:  # 缩短到1分钟冷却
-                    return False
-        
-        # 检查显示次数是否超过限制（每个玩家最多2次机会）
-        display_count = self._form_display_count.get(player_name, 0)
-        if display_count >= 2:
-            return False
-        
-        # 更新缓存和计数
-        self._form_display_cache[player_name] = current_time
-        self._form_display_count[player_name] = display_count + 1
-        
-        self.logger.debug(f"玩家 {player_name} 表单显示次数: {display_count + 1}/2")
-        return True
-    
     def _schedule_cleanup(self):
         """定时清理任务"""
         try:
@@ -1912,7 +2126,7 @@ class qqsync(Plugin):
             self.logger.error(f"处理退群玩家 {player.name} 时出错: {e}")
                     
     def _schedule_multi_player_cleanup(self):
-        """多玩家优化的周期清理任务（简化版本）"""
+        """多玩家优化的周期清理任务"""
         try:
             self._perform_cleanup_tasks_sync()
         except Exception as e:
@@ -1950,10 +2164,10 @@ class qqsync(Plugin):
             for player_name in expired_count_cache:
                 del self._form_display_count[player_name]
             
-            # 清理过期的待确认QQ信息（5分钟过期或玩家离线）
+            # 清理过期的待确认QQ信息（60秒过期或玩家离线）
             expired_confirmations = []
             for player_name, qq_info in self._pending_qq_confirmations.items():
-                if (current_time - qq_info["timestamp"] > 300 or  # 5分钟过期
+                if (current_time - qq_info["timestamp"] > 60 or  # 60秒过期
                     player_name not in online_players):  # 玩家离线
                     expired_confirmations.append(player_name)
             for player_name in expired_confirmations:
@@ -1984,10 +2198,10 @@ class qqsync(Plugin):
             current_time = time.time()
             processed_count = 0
             
-            # 清理过期的队列项（超过5分钟）
+            # 清理过期的队列项（超过60秒）
             original_length = len(self._binding_queue)
             self._binding_queue = [(p, q, t) for p, q, t in self._binding_queue 
-                                 if current_time - t < 300]
+                                 if current_time - t < 60]
             expired_count = original_length - len(self._binding_queue)
             
             # 处理队列中的玩家
@@ -2014,8 +2228,18 @@ class qqsync(Plugin):
                     self._binding_queue.pop(0)
                     self._queue_notification_sent.discard(player_name)
                     
-                    # 通知玩家开始绑定
-                    online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}🎉 排队完成！开始为您处理QQ绑定{ColorFormat.RESET}")
+                    # 通知玩家开始绑定（使用调度器确保在主线程执行）
+                    def notify_player_start():
+                        try:
+                            online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}🎉 排队完成！开始为您处理QQ绑定{ColorFormat.RESET}")
+                        except Exception as e:
+                            self.logger.error(f"发送绑定开始通知失败: {e}")
+                    
+                    self.server.scheduler.run_task(
+                        self,
+                        notify_player_start,
+                        delay=1  # 立即执行
+                    )
                     
                     # 触发绑定流程
                     self.server.scheduler.run_task(
@@ -2031,7 +2255,18 @@ class qqsync(Plugin):
                         queue_position = next((i + 1 for i, (p, _, _) in enumerate(self._binding_queue) 
                                              if p == player_name), 0)
                         if queue_position <= 5:  # 只对前5名发送通知，避免spam
-                            online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.CYAN}⏳ 排队状态更新：您是第{queue_position}位{ColorFormat.RESET}")
+                            # 使用调度器确保在主线程执行
+                            def notify_queue_status():
+                                try:
+                                    online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}⏳ 排队状态更新：您是第{queue_position}位{ColorFormat.RESET}")
+                                except Exception as e:
+                                    self.logger.error(f"发送排队状态更新失败: {e}")
+                            
+                            self.server.scheduler.run_task(
+                                self,
+                                notify_queue_status,
+                                delay=1  # 立即执行
+                            )
                             self._queue_notification_sent.add(player_name)
                     break  # 如果第一个都无法处理，后面的也不行
             
@@ -2041,6 +2276,138 @@ class qqsync(Plugin):
                 
         except Exception as e:
             self.logger.error(f"队列处理失败: {e}")
+    
+    def _process_verification_send_queue(self):
+        """处理验证码发送队列"""
+        try:
+            if not self._verification_send_queue:
+                return
+            
+            current_time = time.time()
+            
+            # 检查发送间隔
+            if current_time - self._last_verification_send_time < self._verification_send_interval:
+                return
+            
+            # 检查WebSocket连接
+            if not self._is_websocket_connected():
+                self.logger.warning("WebSocket未连接，验证码发送队列暂停")
+                return
+            
+            processed = 0
+            to_remove = []
+            
+            for i, (player, qq_number, verification_code, attempt, timestamp) in enumerate(self._verification_send_queue):
+                # 检查是否过期（60秒）
+                if current_time - timestamp > 60:
+                    to_remove.append(i)
+                    continue
+                
+                # 检查玩家是否仍在线
+                online_player = None
+                for p in self.server.online_players:
+                    if p.name == player.name:
+                        online_player = p
+                        break
+                
+                if not online_player:
+                    to_remove.append(i)
+                    continue
+                
+                # 尝试发送验证码
+                try:
+                    verification_text = f"\n🎮 QQsync-群服互通 绑定验证\n\n玩家名: {player.name}\n验证码: {verification_code}\n\n✅ 请在游戏中输入此验证码完成绑定\n📱 或群内输入: /verify {verification_code}\n⏰ 验证码60秒内有效\n\n🔄 尝试次数: {attempt}/{self._max_verification_retries}"
+                    
+                    # 异步发送验证码
+                    asyncio.run_coroutine_threadsafe(
+                        self._send_verification_with_retry(_current_ws, int(qq_number), verification_text, player, verification_code, attempt),
+                        self._loop
+                    )
+                    
+                    # 更新发送时间
+                    self._last_verification_send_time = current_time
+                    
+                    # 标记为已处理
+                    to_remove.append(i)
+                    processed += 1
+                    
+                    self.logger.info(f"验证码发送队列处理: 玩家{player.name} QQ{qq_number} 尝试{attempt}")
+                    
+                    # 每次只处理一个，避免过快发送
+                    break
+                    
+                except Exception as e:
+                    self.logger.error(f"验证码发送失败: {e}")
+                    
+                    # 增加重试计数
+                    if attempt < self._max_verification_retries:
+                        # 更新重试次数
+                        self._verification_send_queue[i] = (player, qq_number, verification_code, attempt + 1, timestamp)
+                    else:
+                        # 超过最大重试次数，通知玩家失败（使用调度器确保在主线程执行）
+                        def notify_player_failure():
+                            try:
+                                online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}验证码发送失败，请重新开始绑定流程{ColorFormat.RESET}")
+                            except Exception as e:
+                                self.logger.error(f"发送验证码失败通知失败: {e}")
+                        
+                        self.server.scheduler.run_task(
+                            self,
+                            notify_player_failure,
+                            delay=1  # 立即执行
+                        )
+                        to_remove.append(i)
+            
+            # 移除已处理或过期的项目（从后往前删除）
+            for i in sorted(to_remove, reverse=True):
+                del self._verification_send_queue[i]
+            
+            if processed > 0:
+                self.logger.debug(f"验证码队列处理完成: 发送{processed}个验证码, 剩余{len(self._verification_send_queue)}个")
+                
+        except Exception as e:
+            self.logger.error(f"验证码发送队列处理失败: {e}")
+    
+    async def _send_verification_with_retry(self, ws, user_id, verification_text, player, verification_code, attempt):
+        """带重试机制的验证码发送（发送到群组@消息）"""
+        try:
+            # 获取目标群组ID
+            target_group = self.get_config("target_group")
+            
+            # 发送群组@消息而不是私聊消息，传递QQ号用于标识
+            await send_group_at_msg(ws, target_group, user_id, verification_text, str(user_id))
+            
+            # 发送成功，在控制台再次显示验证码（确认发送成功）
+            success_console_msg = f"{ColorFormat.GREEN}[验证码发送成功] 玩家: {ColorFormat.WHITE}{player.name}{ColorFormat.GREEN} | QQ: {ColorFormat.WHITE}{user_id}{ColorFormat.GREEN} | 验证码: {ColorFormat.YELLOW}{verification_code}{ColorFormat.GREEN} | 尝试: {attempt} | 方式: 群组@消息{ColorFormat.RESET}"
+            self.logger.info(success_console_msg)
+            print(f"[QQsync验证码发送成功] {player.name} -> QQ: {user_id} 验证码: {verification_code} (群组@)")
+            
+            # 发送成功，通知玩家（必须在主线程中执行）
+            def notify_player_success():
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}验证码已在群组中@您发送！{ColorFormat.RESET}")
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请查看QQ群消息{ColorFormat.RESET}")
+            
+            self.server.scheduler.run_task(
+                self,
+                notify_player_success,
+                delay=1  # 立即执行
+            )
+            
+            # 显示验证码输入表单（必须在主线程中执行）
+            self.server.scheduler.run_task(
+                self,
+                lambda: self.show_verification_form(player),
+                delay=20  # 1秒延迟
+            )
+            
+        except Exception as e:
+            # 发送失败，在控制台显示失败信息
+            fail_console_msg = f"{ColorFormat.RED}[验证码发送失败] 玩家: {ColorFormat.WHITE}{player.name}{ColorFormat.RED} | QQ: {ColorFormat.WHITE}{user_id}{ColorFormat.RED} | 验证码: {ColorFormat.YELLOW}{verification_code}{ColorFormat.RED} | 尝试: {attempt} | 方式: 群组@消息 | 错误: {e}{ColorFormat.RESET}"
+            self.logger.error(fail_console_msg)
+            print(f"[QQsync验证码发送失败] {player.name} -> QQ: {user_id} 尝试: {attempt} 错误: {e} (群组@)")
+            
+            self.logger.error(f"验证码发送异常 (尝试{attempt}): {e}")
+            raise e
     
     def _run_loop(self):
         """在新线程中运行事件循环"""
@@ -2462,6 +2829,127 @@ def format_timestamp(timestamp):
     dt = datetime.datetime.fromtimestamp(timestamp)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
+def remove_emoji_for_game(text):
+    """
+    将emoji表情符号转换为文本描述，供游戏内显示使用
+    """
+    if not text:
+        return text
+    
+    # 常见emoji映射表
+    emoji_map = {
+        '😀': '[笑脸]', '😁': '[开心]', '😂': '[笑哭]', '🤣': '[大笑]', '😃': '[微笑]',
+        '😄': '[开心]', '😅': '[汗笑]', '😆': '[眯眼笑]', '😉': '[眨眼]', '😊': '[微笑]',
+        '😋': '[流口水]', '😎': '[酷]', '😍': '[花眼]', '😘': '[飞吻]', '🥰': '[三颗心]',
+        '😗': '[亲吻]', '😙': '[亲吻]', '😚': '[亲吻]', '☺': '[微笑]', '🙂': '[微笑]',
+        '🤗': '[拥抱]', '🤩': '[星眼]', '🤔': '[思考]', '🤨': '[怀疑]', '😐': '[面无表情]',
+        '😑': '[无语]', '😶': '[无言]', '🙄': '[白眼]', '😏': '[坏笑]', '😣': '[困扰]',
+        '😥': '[失望]', '😮': '[惊讶]', '🤐': '[闭嘴]', '😯': '[惊讶]', '😪': '[困倦]',
+        '😫': '[疲倦]', '😴': '[睡觉]', '😌': '[安心]', '😛': '[吐舌]', '😜': '[眨眼吐舌]',
+        '😝': '[闭眼吐舌]', '🤤': '[流口水]', '😒': '[无聊]', '😓': '[冷汗]', '😔': '[沮丧]',
+        '😕': '[困惑]', '🙃': '[倒脸]', '🤑': '[财迷]', '😲': '[震惊]', '☹': '[皱眉]',
+        '🙁': '[皱眉]', '😖': '[困扰]', '😞': '[失望]', '😟': '[担心]', '😤': '[愤怒]',
+        '😢': '[流泪]', '😭': '[大哭]', '😦': '[皱眉]', '😧': '[痛苦]', '😨': '[害怕]',
+        '😩': '[疲倦]', '🤯': '[爆头]', '😬': '[咧嘴]', '😰': '[冷汗]', '😱': '[尖叫]',
+        '🥵': '[热]', '🥶': '[冷]', '😳': '[脸红]', '🤪': '[疯狂]', '😵': '[晕]',
+        '😡': '[愤怒]', '😠': '[生气]', '🤬': '[咒骂]', '😷': '[口罩]', '🤒': '[生病]',
+        '🤕': '[受伤]', '🤢': '[恶心]', '🤮': '[呕吐]', '🤧': '[喷嚏]', '😇': '[天使]',
+        '🥳': '[庆祝]', '🥺': '[请求]', '🤠': '[牛仔]', '🤡': '[小丑]', '🤥': '[说谎]',
+        '🤫': '[嘘]', '🤭': '[捂嘴笑]', '🧐': '[单片眼镜]', '🤓': '[书呆子]',
+        # 手势
+        '👍': '[赞]', '👎': '[踩]', '👌': '[OK]', '✌': '[胜利]', '🤞': '[交叉手指]',
+        '🤟': '[爱你]', '🤘': '[摇滚]', '🤙': '[打电话]', '👈': '[左指]', '👉': '[右指]',
+        '👆': '[上指]', '👇': '[下指]', '☝': '[食指]', '✋': '[举手]', '🤚': '[举手背]',
+        '🖐': '[张开手]', '🖖': '[瓦肯礼]', '👋': '[挥手]', '🤛': '[左拳]', '🤜': '[右拳]',
+        '👊': '[拳头]', '✊': '[拳头]', '👏': '[拍手]', '🙌': '[举双手]', '👐': '[张开双手]',
+        '🤲': '[捧手]', '🙏': '[祈祷]', '✍': '[写字]', '💪': '[肌肉]',
+        # 心形
+        '❤': '[红心]', '🧡': '[橙心]', '💛': '[黄心]', '💚': '[绿心]', '💙': '[蓝心]',
+        '💜': '[紫心]', '🖤': '[黑心]', '🤍': '[白心]', '🤎': '[棕心]', '💔': '[心碎]',
+        '❣': '[心叹号]', '💕': '[两颗心]', '💞': '[旋转心]', '💓': '[心跳]', '💗': '[增长心]',
+        '💖': '[闪亮心]', '💘': '[心箭]', '💝': '[心礼盒]', '💟': '[心装饰]',
+        # 常用符号
+        '🔥': '[火]', '💯': '[100分]', '💢': '[愤怒]', '💥': '[爆炸]', '💫': '[星星]',
+        '💦': '[汗滴]', '💨': '[风]', '🕳': '[洞]', '💣': '[炸弹]', '💤': '[睡觉]',
+        '👀': '[眼睛]', '🗨': '[对话框]', '💭': '[思考泡泡]', '💯': '[满分]',
+        # 食物
+        '🍕': '[披萨]', '🍔': '[汉堡]', '🍟': '[薯条]', '🌭': '[热狗]', '🥪': '[三明治]',
+        '🌮': '[玉米饼]', '🌯': '[卷饼]', '🥙': '[口袋饼]', '🧆': '[丸子]', '🥚': '[鸡蛋]',
+        '🍳': '[煎蛋]', '🥘': '[炖菜]', '🍲': '[火锅]', '🥣': '[碗]', '🥗': '[沙拉]',
+        '🍿': '[爆米花]', '🧈': '[黄油]', '🧂': '[盐]', '🥫': '[罐头]', '🍱': '[便当]',
+        '🍘': '[米饼]', '🍙': '[饭团]', '🍚': '[米饭]', '🍛': '[咖喱]', '🍜': '[拉面]',
+        '🍝': '[意面]', '🍠': '[红薯]', '🍢': '[关东煮]', '🍣': '[寿司]', '🍤': '[天妇罗]',
+        '🍥': '[鱼糕]', '🥮': '[月饼]', '🍡': '[丸子]', '🥟': '[饺子]', '🥠': '[幸运饼]',
+        '🥡': '[外卖盒]', '🦀': '[螃蟹]', '🦞': '[龙虾]', '🦐': '[虾]', '🦑': '[鱿鱼]',
+        '🐙': '[章鱼]', '🍌': '[香蕉]', '🍎': '[苹果]', '🍏': '[青苹果]', '🍐': '[梨]',
+        '🍊': '[橘子]', '🍋': '[柠檬]', '🍉': '[西瓜]', '🍇': '[葡萄]', '🍓': '[草莓]',
+        '🫐': '[蓝莓]', '🍈': '[甜瓜]', '🍒': '[樱桃]', '🍑': '[桃子]', '🥭': '[芒果]',
+        '🍍': '[菠萝]', '🥥': '[椰子]', '🥝': '[猕猴桃]', '🍅': '[番茄]', '🍆': '[茄子]',
+        '🥑': '[牛油果]', '🥦': '[西兰花]', '🥬': '[白菜]', '🥒': '[黄瓜]', '🌶': '[辣椒]',
+        '🫑': '[彩椒]', '🌽': '[玉米]', '🥕': '[胡萝卜]', '🫒': '[橄榄]', '🧄': '[大蒜]',
+        '🧅': '[洋葱]', '🥔': '[土豆]', '🍠': '[红薯]', '🥐': '[羊角包]', '🥖': '[法棍]',
+        '🫓': '[扁面包]', '🥨': '[椒盐卷饼]', '🥯': '[百吉饼]', '🍞': '[面包]', '🥜': '[花生]',
+        '🌰': '[栗子]', '🥧': '[派]', '🧁': '[纸杯蛋糕]', '🍰': '[蛋糕]', '🎂': '[生日蛋糕]',
+        '🍮': '[布丁]', '🍭': '[棒棒糖]', '🍬': '[糖果]', '🍫': '[巧克力]', '🍩': '[甜甜圈]',
+        '🍪': '[饼干]', '🌭': '[热狗]', '☕': '[咖啡]', '🍵': '[茶]', '🧃': '[果汁盒]',
+        '🥤': '[饮料]', '🧋': '[奶茶]', '🍶': '[清酒]', '🍾': '[香槟]', '🍷': '[红酒]',
+        '🍸': '[鸡尾酒]', '🍹': '[热带饮料]', '🍺': '[啤酒]', '🍻': '[干杯]', '🥂': '[香槟杯]',
+        '🥃': '[威士忌]', '🥛': '[牛奶]', '🧊': '[冰块]', '🥄': '[勺子]', '🍴': '[餐具]',
+        '🍽': '[餐盘]', '🥢': '[筷子]', '🏺': '[陶罐]',
+        # 动物
+        '🐶': '[小狗]', '🐱': '[小猫]', '🐭': '[老鼠]', '🐹': '[仓鼠]', '🐰': '[兔子]',
+        '🦊': '[狐狸]', '🐻': '[熊]', '🐼': '[熊猫]', '🐻‍❄️': '[北极熊]', '🐨': '[考拉]',
+        '🐯': '[老虎]', '🦁': '[狮子]', '🐮': '[牛]', '🐷': '[猪]', '🐽': '[猪鼻]',
+        '🐸': '[青蛙]', '🐵': '[猴脸]', '🙈': '[非礼勿视]', '🙉': '[非礼勿听]', '🙊': '[非礼勿言]',
+        '🐒': '[猴子]', '🐔': '[鸡]', '🐧': '[企鹅]', '🐦': '[鸟]', '🐤': '[小鸡]',
+        '🐣': '[破壳鸡]', '🐥': '[小鸡]', '🦆': '[鸭子]', '🦅': '[老鹰]', '🦉': '[猫头鹰]',
+        '🦇': '[蝙蝠]', '🐺': '[狼]', '🐗': '[野猪]', '🐴': '[马脸]', '🦄': '[独角兽]',
+        '🐝': '[蜜蜂]', '🐛': '[毛毛虫]', '🦋': '[蝴蝶]', '🐌': '[蜗牛]', '🐞': '[瓢虫]',
+        '🐜': '[蚂蚁]', '🦟': '[蚊子]', '🦗': '[蟋蟀]', '🕷': '[蜘蛛]', '🕸': '[蜘蛛网]',
+        '🦂': '[蝎子]', '🐢': '[乌龟]', '🐍': '[蛇]', '🦎': '[蜥蜴]', '🦖': '[霸王龙]',
+        '🦕': '[长颈龙]', '🐙': '[章鱼]', '🦑': '[鱿鱼]', '🦐': '[虾]', '🦞': '[龙虾]',
+        '🦀': '[螃蟹]', '🐡': '[河豚]', '🐠': '[热带鱼]', '🐟': '[鱼]', '🐬': '[海豚]',
+        '🐳': '[鲸鱼]', '🐋': '[蓝鲸]', '🦈': '[鲨鱼]', '🐊': '[鳄鱼]', '🐅': '[老虎]',
+        '🐆': '[豹子]', '🦓': '[斑马]', '🦍': '[大猩猩]', '🦧': '[猩猩]', '🐘': '[大象]',
+        '🦣': '[猛犸象]', '🦏': '[犀牛]', '🦛': '[河马]', '🐪': '[骆驼]', '🐫': '[双峰驼]',
+        '🦒': '[长颈鹿]', '🦘': '[袋鼠]', '🐃': '[水牛]', '🐂': '[公牛]', '🐄': '[奶牛]',
+        '🐎': '[马]', '🐖': '[猪]', '🐏': '[公羊]', '🐑': '[绵羊]', '🦙': '[羊驼]',
+        '🐐': '[山羊]', '🦌': '[鹿]', '🐕': '[狗]', '🐩': '[贵宾犬]', '🦮': '[导盲犬]',
+        '🐕‍🦺': '[服务犬]', '🐈': '[猫]', '🐈‍⬛': '[黑猫]', '🐓': '[公鸡]', '🦃': '[火鸡]',
+        '🦚': '[孔雀]', '🦜': '[鹦鹉]', '🦢': '[天鹅]', '🦩': '[火烈鸟]', '🕊': '[鸽子]',
+        '🐇': '[兔子]', '🦝': '[浣熊]', '🦨': '[臭鼬]', '🦡': '[獾]', '🦦': '[水獭]',
+        '🦥': '[树懒]', '🐁': '[老鼠]', '🐀': '[大老鼠]', '🐿': '[松鼠]', '🦔': '[刺猬]',
+    }
+    
+    # 替换已知的emoji
+    result = text
+    for emoji, description in emoji_map.items():
+        result = result.replace(emoji, description)
+    
+    # 使用正则表达式移除其他unicode emoji
+    # 这个正则表达式匹配大部分emoji字符
+    emoji_pattern = re.compile(
+        '['
+        '\U0001F600-\U0001F64F'  # 表情符号
+        '\U0001F300-\U0001F5FF'  # 符号和象形文字
+        '\U0001F680-\U0001F6FF'  # 交通和地图符号
+        '\U0001F1E0-\U0001F1FF'  # 国旗
+        '\U00002600-\U000026FF'  # 杂项符号
+        '\U00002700-\U000027BF'  # 装饰符号
+        '\U0001F900-\U0001F9FF'  # 补充符号和象形文字
+        '\U0001FA70-\U0001FAFF'  # 符号和象形文字扩展-A
+        '\U00002300-\U000023FF'  # 杂项技术符号
+        '\U0001F000-\U0001F02F'  # 麻将符号
+        '\U0001F0A0-\U0001F0FF'  # 扑克符号
+        ']+',
+        flags=re.UNICODE
+    )
+    
+    # 将未映射的emoji替换为[表情]
+    result = emoji_pattern.sub('[表情]', result)
+    
+    return result
+
 def parse_qq_message(message_data):
     """
     解析QQ消息，将非文本内容转换为对应的标识符
@@ -2513,6 +3001,9 @@ def parse_qq_message(message_data):
         cq_pattern = r'\[CQ:([^,\]]+)(?:,([^\]]*))?\]'
         processed_message = re.sub(cq_pattern, replace_cq_code, raw_message)
         
+        # 处理emoji表情符号，转换为游戏内可显示的文本
+        processed_message = remove_emoji_for_game(processed_message)
+        
         # 如果处理后的消息不为空，返回处理结果
         if processed_message.strip():
             return processed_message.strip()
@@ -2532,20 +3023,138 @@ async def send_group_msg(ws, group_id: int, text: str):
             error_msg = f"{ColorFormat.RED}消息发送失败: {ColorFormat.YELLOW}{e}{ColorFormat.RESET}"
             _plugin_instance.logger.error(error_msg)
 
-async def send_private_msg(ws, user_id: int, text: str):
-    """发送私聊消息"""
+async def send_group_at_msg(ws, group_id: int, user_id: int, text: str, verification_qq: str = None):
+    """发送群组@消息"""
+    # 构建@消息格式
+    message = [
+        {
+            "type": "at",
+            "data": {
+                "qq": str(user_id)
+            }
+        },
+        {
+            "type": "text",
+            "data": {
+                "text": f" {text}"
+            }
+        }
+    ]
+    
     payload = {
-        "action": "send_private_msg",
-        "params": {"user_id": user_id, "message": text.strip()},
+        "action": "send_group_msg",
+        "params": {
+            "group_id": group_id, 
+            "message": message
+        },
     }
+    
+    # 如果是验证码消息，添加echo标识符和超时检查
+    if verification_qq:
+        payload["echo"] = f"verification_msg:{verification_qq}"
+        
+        # 设置超时检查：如果5秒内没有收到API响应，记录警告
+        async def check_message_id_timeout():
+            await asyncio.sleep(5)  # 等待5秒
+            if verification_qq not in _verification_messages:
+                if _plugin_instance:
+                    _plugin_instance.logger.warning(f"验证码消息发送后未能获取message_id，无法自动撤回 (QQ: {verification_qq})")
+        
+        # 异步启动超时检查
+        asyncio.create_task(check_message_id_timeout())
+    
+    max_retries = 3
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            # 检查WebSocket连接状态（安全方式）
+            try:
+                if hasattr(ws, 'closed') and ws.closed:
+                    raise Exception("WebSocket连接已关闭")
+                elif hasattr(ws, 'close_code') and ws.close_code is not None:
+                    raise Exception("WebSocket连接已关闭")
+            except AttributeError:
+                # 如果无法检查状态，继续尝试发送
+                pass
+            
+            await ws.send(json.dumps(payload))
+            
+            if _plugin_instance:
+                _plugin_instance.logger.info(f"{ColorFormat.GREEN}验证码已发送到群组@消息: QQ{user_id} (尝试{attempt + 1}){ColorFormat.RESET}")
+            return True
+            
+        except Exception as e:
+            if _plugin_instance:
+                _plugin_instance.logger.warning(f"群组@消息发送失败 (尝试{attempt + 1}/{max_retries}): {e}")
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # 指数退避
+            else:
+                if _plugin_instance:
+                    error_msg = f"{ColorFormat.RED}群组@消息发送最终失败: {ColorFormat.YELLOW}{e}{ColorFormat.RESET}"
+                    _plugin_instance.logger.error(error_msg)
+                raise e
+    
+    return False
+
+async def delete_verification_message(qq_number: str, retry_count: int = 0):
+    """撤回验证码消息（带重试机制）"""
+    global _verification_messages
+    
+    if qq_number in _verification_messages and _current_ws:
+        try:
+            message_info = _verification_messages[qq_number]
+            message_id = message_info["message_id"]
+            
+            # 撤回消息
+            success = await delete_msg(_current_ws, message_id)
+            
+            if success:
+                # 从记录中移除
+                del _verification_messages[qq_number]
+                
+                if _plugin_instance:
+                    _plugin_instance.logger.info(f"{ColorFormat.GREEN}已撤回QQ {qq_number} 的验证码消息{ColorFormat.RESET}")
+            else:
+                # 撤回失败，重试
+                if retry_count < 2:  # 最多重试2次
+                    await asyncio.sleep(1)  # 等待1秒后重试
+                    await delete_verification_message(qq_number, retry_count + 1)
+                else:
+                    # 重试失败，仍然从记录中移除，避免重复尝试
+                    del _verification_messages[qq_number]
+                    if _plugin_instance:
+                        _plugin_instance.logger.warning(f"QQ {qq_number} 的验证码消息撤回失败，已放弃重试")
+                
+        except Exception as e:
+            if _plugin_instance:
+                _plugin_instance.logger.error(f"撤回验证码消息失败 (QQ: {qq_number}): {e}")
+            
+            # 发生异常时，如果不是网络问题，也从记录中移除
+            if qq_number in _verification_messages:
+                del _verification_messages[qq_number]
+
+async def delete_msg(ws, message_id: int):
+    """撤回消息"""
+    payload = {
+        "action": "delete_msg",
+        "params": {
+            "message_id": message_id
+        }
+    }
+    
     try:
         await ws.send(json.dumps(payload))
         if _plugin_instance:
-            _plugin_instance.logger.info(f"{ColorFormat.GREEN}验证码已发送到QQ: {user_id}{ColorFormat.RESET}")
+            _plugin_instance.logger.info(f"{ColorFormat.GREEN}已撤回消息 ID: {message_id}{ColorFormat.RESET}")
+        return True
     except Exception as e:
         if _plugin_instance:
-            error_msg = f"{ColorFormat.RED}私聊消息发送失败: {ColorFormat.YELLOW}{e}{ColorFormat.RESET}"
+            error_msg = f"{ColorFormat.RED}撤回消息失败: {ColorFormat.YELLOW}{e}{ColorFormat.RESET}"
             _plugin_instance.logger.error(error_msg)
+        return False
 
 async def set_group_card(ws, group_id: int, user_id: int, card: str):
     """设置群昵称"""
@@ -2592,7 +3201,10 @@ async def get_group_member_list(ws, group_id: int):
 async def handle_message(ws, data: dict):
     group_id = data.get("group_id")
     user_id = str(data.get("user_id"))
-    nickname = data.get("sender", {}).get("nickname", user_id)
+    raw_nickname = data.get("sender", {}).get("nickname", user_id)
+    
+    # 处理昵称中的emoji，确保控制台和游戏内显示正常
+    nickname = remove_emoji_for_game(raw_nickname)
     
     # 解析消息内容，处理非文本消息
     processed_msg = parse_qq_message(data)
@@ -2607,6 +3219,9 @@ async def handle_message(ws, data: dict):
             # 检查发送者是否绑定了游戏角色
             bound_player = _plugin_instance.get_qq_player(user_id)
             display_name = bound_player if bound_player else nickname
+            
+            # 确保显示名称不包含emoji（额外保护）
+            display_name = remove_emoji_for_game(display_name)
             
             # 格式化消息
             game_msg = f"{ColorFormat.LIGHT_PURPLE}[QQ群]{ColorFormat.RESET} {ColorFormat.AQUA}{display_name}{ColorFormat.RESET}: {processed_msg}"
@@ -3050,59 +3665,67 @@ async def handle_message(ws, data: dict):
         
         if user_id in _verification_codes:
             code_info = _verification_codes[user_id]
-            if time.time() - code_info["timestamp"] > 300:  # 5分钟过期
+            # 双重时间检查：timestamp和creation_time
+            time_since_creation = time.time() - code_info["timestamp"]
+            
+            # 如果有精确时间记录，使用更准确的检查
+            if "creation_time" in code_info:
+                creation_time = code_info["creation_time"]
+                time_delta = datetime.datetime.now() - creation_time
+                is_expired = time_delta.total_seconds() > 60
+            else:
+                is_expired = time_since_creation > 60
+                
+            if is_expired:  # 60秒过期
                 del _verification_codes[user_id]
                 # 同时清理对应的待验证数据
                 player_name = code_info.get("player_name")
                 if player_name and player_name in _pending_verifications:
                     del _pending_verifications[player_name]
-                reply = "验证码已过期，请重新在游戏中申请绑定"
+                
+                # 撤回过期的验证码消息
+                if _current_ws:
+                    asyncio.run_coroutine_threadsafe(
+                        delete_verification_message(user_id),
+                        _plugin_instance._loop
+                    )
+                
+                reply = f"验证码已过期（{time_since_creation:.1f}秒），请重新在游戏中申请绑定"
             elif verification_code == code_info["code"]:
-                # 验证成功，直接完成绑定
+                # 验证码匹配，但需要进一步验证安全性
                 player_name = code_info["player_name"]
                 
-                # 检查玩家是否在线以获取XUID
-                online_player = None
-                if _plugin_instance:
-                    for player in _plugin_instance.server.online_players:
-                        if player.name == player_name:
-                            online_player = player
-                            break
-                
-                if online_player:
-                    # 玩家在线，直接绑定
-                    _plugin_instance.bind_player_qq(player_name, online_player.xuid, user_id)
-                    
-                    # 设置QQ群昵称为玩家名（仅在启用QQ绑定且同步群昵称时）
-                    if (_current_ws and 
-                        _plugin_instance.get_config("force_bind_qq", True) and 
-                        _plugin_instance.get_config("sync_group_card", True)):
-                        target_group = _plugin_instance.get_config("target_group")
-                        asyncio.run_coroutine_threadsafe(
-                            set_group_card(_current_ws, group_id=target_group, user_id=int(user_id), card=player_name),
-                            _plugin_instance._loop
-                        )
-                    
-                    # 发送成功消息给玩家（如果在线）
-                    online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}🎉 QQ绑定成功！{ColorFormat.RESET}")
-                    online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}您的QQ {user_id} 已与游戏账号绑定{ColorFormat.RESET}")
-                    
-                    # 恢复玩家权限（从访客权限升级为正常权限）
-                    if _plugin_instance.get_config("force_bind_qq", True):
-                        _plugin_instance.server.scheduler.run_task(
-                            _plugin_instance,
-                            lambda: _plugin_instance.restore_player_permissions(online_player),
-                            delay=5  # 短暂延迟确保绑定数据已保存
-                        )
-                    
-                    reply = f"🎉 绑定成功！\n玩家 {player_name} 已与您的QQ绑定"
+                # 安全检查1：验证该玩家确实在pending_verifications中有对应的验证请求
+                if player_name not in _pending_verifications:
+                    reply = "验证码无效：该验证码对应的玩家未在游戏中申请绑定"
+                    _plugin_instance.logger.warning(f"QQ验证安全检查失败: 玩家 {player_name} 不在待验证列表中 (QQ: {user_id})")
+                elif _pending_verifications[player_name].get("qq") != str(user_id):
+                    reply = "验证码无效：该验证码不属于您的QQ号"
+                    _plugin_instance.logger.warning(f"QQ验证安全检查失败: QQ号不匹配 - 期望: {_pending_verifications[player_name].get('qq')}, 实际: {user_id}")
+                elif code_info.get("used", False):
+                    reply = "验证码已使用：该验证码已被使用过，请重新申请"
+                    _plugin_instance.logger.warning(f"QQ验证安全检查失败: 验证码已被使用 (QQ: {user_id}, 玩家: {player_name})")
                 else:
-                    # 玩家不在线，从待验证数据中获取信息并完成绑定
-                    if player_name in _pending_verifications:
-                        pending_info = _pending_verifications[player_name]
-                        # 使用临时XUID（玩家下次上线时会更新）
-                        temp_xuid = f"temp_{int(time.time())}"
-                        _plugin_instance.bind_player_qq(player_name, temp_xuid, user_id)
+                    # 安全检查通过，继续绑定流程
+                    # 标记验证码为已使用，防止重复使用
+                    code_info["used"] = True
+                    code_info["use_time"] = time.time()
+                    
+                    # 控制台显示验证成功信息
+                    verify_success_msg = f"{ColorFormat.GREEN}[验证成功] 玩家: {ColorFormat.WHITE}{player_name}{ColorFormat.GREEN} | QQ: {ColorFormat.WHITE}{user_id}{ColorFormat.GREEN} | 验证码: {ColorFormat.YELLOW}{verification_code}{ColorFormat.GREEN} | 绑定完成{ColorFormat.RESET}"
+                    _plugin_instance.logger.info(verify_success_msg)
+                    
+                    # 检查玩家是否在线以获取XUID
+                    online_player = None
+                    if _plugin_instance:
+                        for player in _plugin_instance.server.online_players:
+                            if player.name == player_name:
+                                online_player = player
+                                break
+                    
+                    if online_player:
+                        # 玩家在线，直接绑定
+                        _plugin_instance.bind_player_qq(player_name, online_player.xuid, user_id)
                         
                         # 设置QQ群昵称为玩家名（仅在启用QQ绑定且同步群昵称时）
                         if (_current_ws and 
@@ -3114,25 +3737,115 @@ async def handle_message(ws, data: dict):
                                 _plugin_instance._loop
                             )
                         
-                        reply = f"🎉 绑定成功！\n玩家 {player_name} 已与您的QQ绑定\n下次登录游戏时将自动更新绑定信息"
+                        # 发送成功消息给玩家（如果在线）- 使用调度器确保在主线程执行
+                        def notify_player_success():
+                            try:
+                                online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}🎉 QQ绑定成功！{ColorFormat.RESET}")
+                                online_player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}您的QQ {user_id} 已与游戏账号绑定{ColorFormat.RESET}")
+                            except Exception as e:
+                                _plugin_instance.logger.error(f"发送绑定成功消息失败: {e}")
+                        
+                        _plugin_instance.server.scheduler.run_task(
+                            _plugin_instance,
+                            notify_player_success,
+                            delay=1  # 立即执行
+                        )
+                        
+                        # 恢复玩家权限（从访客权限升级为正常权限）
+                        if _plugin_instance.get_config("force_bind_qq", True):
+                            _plugin_instance.server.scheduler.run_task(
+                                _plugin_instance,
+                                lambda: _plugin_instance.restore_player_permissions(online_player),
+                                delay=5  # 短暂延迟确保绑定数据已保存
+                            )
+                        
+                        reply = f"🎉 绑定成功！\n玩家 {player_name} 已与您的QQ绑定"
                     else:
-                        reply = f"验证码正确！但无法找到玩家 {player_name} 的绑定信息\n请重新在游戏中申请绑定"
-                
-                # 清理验证数据
-                del _verification_codes[user_id]
-                if player_name in _pending_verifications:
-                    del _pending_verifications[player_name]
-                
-                # 通知QQ群
-                if _current_ws and reply.startswith("🎉"):
-                    asyncio.run_coroutine_threadsafe(
-                        send_group_msg(_current_ws, group_id=group_id, text=f"🎮 玩家 {player_name} 已完成QQ绑定"),
-                        _plugin_instance._loop
-                    )
+                        # 玩家不在线，从待验证数据中获取信息并完成绑定
+                        if player_name in _pending_verifications:
+                            pending_info = _pending_verifications[player_name]
+                            # 使用临时XUID（玩家下次上线时会更新）
+                            temp_xuid = f"temp_{int(time.time())}"
+                            _plugin_instance.bind_player_qq(player_name, temp_xuid, user_id)
+                            
+                            # 设置QQ群昵称为玩家名（仅在启用QQ绑定且同步群昵称时）
+                            if (_current_ws and 
+                                _plugin_instance.get_config("force_bind_qq", True) and 
+                                _plugin_instance.get_config("sync_group_card", True)):
+                                target_group = _plugin_instance.get_config("target_group")
+                                asyncio.run_coroutine_threadsafe(
+                                    set_group_card(_current_ws, group_id=target_group, user_id=int(user_id), card=player_name),
+                                    _plugin_instance._loop
+                                )
+                            
+                            reply = f"🎉 绑定成功！\n玩家 {player_name} 已与您的QQ绑定\n下次登录游戏时将自动更新绑定信息"
+                        else:
+                            reply = f"验证码正确！但无法找到玩家 {player_name} 的绑定信息\n请重新在游戏中申请绑定"
+                    
+                    # 清理验证数据
+                    del _verification_codes[user_id]
+                    
+                    # 清理QQ验证尝试计数器
+                    attempts_key = f"verify_attempts_{user_id}"
+                    if hasattr(_plugin_instance, '_verification_attempts') and attempts_key in _plugin_instance._verification_attempts:
+                        del _plugin_instance._verification_attempts[attempts_key]
+                    
+                    # 撤回验证码消息
+                    if _current_ws:
+                        asyncio.run_coroutine_threadsafe(
+                            delete_verification_message(user_id),
+                            _plugin_instance._loop
+                        )
+                    if player_name in _pending_verifications:
+                        del _pending_verifications[player_name]
+                    
+                    # 通知QQ群
+                    if _current_ws and reply.startswith("🎉"):
+                        asyncio.run_coroutine_threadsafe(
+                            send_group_msg(_current_ws, group_id=group_id, text=f"🎮 玩家 {player_name} 已完成QQ绑定"),
+                            _plugin_instance._loop
+                        )
             else:
-                # 验证失败，记录冷却时间（多玩家优化）
-                _plugin_instance._binding_rate_limit[user_id] = time.time()
-                reply = "验证码错误，请检查后重试"
+                # 验证失败处理：给玩家多次重试机会
+                attempts_key = f"verify_attempts_{user_id}"
+                current_attempts = getattr(_plugin_instance, '_verification_attempts', {}).get(attempts_key, 0) + 1
+                
+                # 初始化验证尝试计数器
+                if not hasattr(_plugin_instance, '_verification_attempts'):
+                    _plugin_instance._verification_attempts = {}
+                _plugin_instance._verification_attempts[attempts_key] = current_attempts
+                
+                max_attempts = 3  # 最多允许3次尝试
+                remaining_attempts = max_attempts - current_attempts
+                
+                if remaining_attempts > 0:
+                    # 还有重试机会，记录冷却时间和安全日志
+                    _plugin_instance._binding_rate_limit[user_id] = time.time()
+                    player_name = code_info.get("player_name", "unknown")
+                    _plugin_instance.logger.warning(f"QQ验证码验证失败: QQ {user_id} 输入错误验证码，对应玩家: {player_name}，剩余尝试次数: {remaining_attempts}")
+                    reply = f"验证码错误！还可以尝试 {remaining_attempts} 次\n请检查验证码后重新输入"
+                else:
+                    # 尝试次数用完，清理验证数据并要求重新申请
+                    player_name = code_info.get("player_name", "unknown")
+                    _plugin_instance.logger.warning(f"QQ验证码尝试次数超限: QQ {user_id} 已尝试 {max_attempts} 次，清理验证数据")
+                    
+                    # 清理验证数据
+                    del _verification_codes[user_id]
+                    if player_name in _pending_verifications:
+                        del _pending_verifications[player_name]
+                    
+                    # 撤回验证码消息
+                    if _current_ws:
+                        asyncio.run_coroutine_threadsafe(
+                            delete_verification_message(user_id),
+                            _plugin_instance._loop
+                        )
+                    
+                    # 清理尝试计数
+                    if attempts_key in _plugin_instance._verification_attempts:
+                        del _plugin_instance._verification_attempts[attempts_key]
+                    
+                    reply = f"验证码尝试次数已达上限（{max_attempts}次）\n请重新在游戏中申请绑定获取新的验证码"
         else:
             # 未找到验证码，记录冷却时间（多玩家优化）
             _plugin_instance._binding_rate_limit[user_id] = time.time()
@@ -3374,15 +4087,32 @@ async def connect_forever():
     connect_msg = f"{ColorFormat.GOLD}连接地址: {ColorFormat.WHITE}{napcat_ws}{ColorFormat.RESET}"
     _plugin_instance.logger.info(connect_msg)
     
+    consecutive_failures = 0
+    max_consecutive_failures = 5
+    
     while True:
         try:
-            async with websockets.connect(napcat_ws, additional_headers=headers) as ws:
+            # 增加连接超时和ping间隔设置
+            async with websockets.connect(
+                napcat_ws, 
+                additional_headers=headers,
+                ping_interval=20,  # 20秒ping间隔
+                ping_timeout=10,   # 10秒ping超时
+                close_timeout=10   # 10秒关闭超时
+            ) as ws:
                 _current_ws = ws  # 设置全局websocket变量
+                consecutive_failures = 0  # 重置失败计数
+                
                 success_msg = f"{ColorFormat.GREEN}✅ 已连接 {ColorFormat.YELLOW}NapCat WS{ColorFormat.RESET}"
                 _plugin_instance.logger.info(success_msg)
                 
                 # 连接成功后立即获取群成员列表
                 await get_group_member_list(ws, _plugin_instance.get_config("target_group"))
+                
+                # 处理待发送的验证码队列
+                if hasattr(_plugin_instance, '_verification_send_queue') and _plugin_instance._verification_send_queue:
+                    queue_count = len(_plugin_instance._verification_send_queue)
+                    _plugin_instance.logger.info(f"WebSocket重连后，发现{queue_count}个待发送验证码，将重新处理")
                 
                 await asyncio.gather(
                     heartbeat(ws),
@@ -3390,10 +4120,24 @@ async def connect_forever():
                 )
         except Exception as e:
             _current_ws = None  # 连接断开时清空
-            error_msg = f"{ColorFormat.RED}❌ 连接断开：{ColorFormat.YELLOW}{e}{ColorFormat.RED}，{ColorFormat.WHITE}{delay}s {ColorFormat.RED}后重连{ColorFormat.RESET}"
-            _plugin_instance.logger.error(error_msg)
+            consecutive_failures += 1
+            
+            # 根据连续失败次数调整重连策略
+            if consecutive_failures <= max_consecutive_failures:
+                error_msg = f"{ColorFormat.RED}❌ NapCat WS 连接失败 (尝试{consecutive_failures}/{max_consecutive_failures}): {ColorFormat.YELLOW}{e}{ColorFormat.RESET}"
+                _plugin_instance.logger.warning(error_msg)
+                
+                # 指数退避，但最大不超过30秒
+                delay = min(30, delay * 1.5 if consecutive_failures > 1 else 5)
+            else:
+                error_msg = f"{ColorFormat.RED}❌ NapCat WS 连接持续失败，暂停重连30秒: {ColorFormat.YELLOW}{e}{ColorFormat.RESET}"
+                _plugin_instance.logger.error(error_msg)
+                delay = 30  # 持续失败时使用固定延迟
+                consecutive_failures = 0  # 重置计数，给系统恢复机会
+            
+            retry_msg = f"{ColorFormat.AQUA}🔄 将在 {delay:.1f} 秒后重试连接...{ColorFormat.RESET}"
+            _plugin_instance.logger.info(retry_msg)
             await asyncio.sleep(delay)
-            delay = min(delay * 2, 60)
         else:
             delay = 1
 
@@ -3404,9 +4148,34 @@ async def heartbeat(ws):
 
 async def handle_api_response(data: dict):
     """处理API响应"""
+    global _verification_messages
+    
     try:
+        # 处理发送消息响应（获取消息ID用于撤回）
+        if (data.get("data") and isinstance(data["data"], dict) and 
+            "message_id" in data["data"]):
+            message_id = data["data"]["message_id"]
+            echo = data.get("echo", "")
+            
+            # 检查是否为验证码消息
+            if echo.startswith("verification_msg:"):
+                qq_number = echo.split(":", 1)[1]
+                
+                # 获取对应的玩家名
+                player_name = ""
+                if qq_number in _verification_codes:
+                    player_name = _verification_codes[qq_number].get("player_name", "")
+                
+                _verification_messages[qq_number] = {
+                    "message_id": message_id,
+                    "timestamp": time.time(),
+                    "player_name": player_name
+                }
+                if _plugin_instance:
+                    _plugin_instance.logger.info(f"{ColorFormat.GREEN}已记录验证码消息ID: {message_id} (QQ: {qq_number}){ColorFormat.RESET}")
+            
         # 处理群成员列表响应
-        if data.get("data") and isinstance(data["data"], list):
+        elif data.get("data") and isinstance(data["data"], list):
             # 假设这是群成员列表响应
             member_list = data["data"]
             if _plugin_instance and hasattr(_plugin_instance, '_group_members'):
@@ -3571,3 +4340,43 @@ async def message_loop(ws):
             if _plugin_instance:
                 error_msg = f"{ColorFormat.RED}处理消息失败: {ColorFormat.YELLOW}{e}{ColorFormat.RESET}"
                 _plugin_instance.logger.error(error_msg)
+
+async def _verify_data_consistency():
+    """验证数据一致性和时间记录完整性"""
+    try:
+        current_time = datetime.datetime.now()
+        inconsistencies = []
+        
+        # 检查_pending_verifications和_verification_codes的一致性
+        for player_name, pending_info in list(_pending_verifications.items()):
+            qq_number = pending_info.get("qq")
+            if qq_number not in _verification_codes:
+                inconsistencies.append(f"Player {player_name} in pending but not in codes")
+                continue
+                
+            code_info = _verification_codes[qq_number]
+            
+            # 检查时间记录完整性
+            if "creation_time" not in pending_info or "creation_time" not in code_info:
+                inconsistencies.append(f"Missing creation_time for {player_name}")
+                continue
+                
+            # 检查时间是否超过60秒
+            time_diff = current_time - pending_info["creation_time"]
+            if time_diff.total_seconds() > 60:
+                inconsistencies.append(f"Expired verification for {player_name} ({time_diff.total_seconds():.1f}s)")
+                
+                # 清理过期数据并撤回消息
+                del _pending_verifications[player_name]
+                del _verification_codes[qq_number]
+                
+                if _current_ws:
+                    await delete_verification_message(qq_number)
+        
+        # 记录发现的不一致性
+        if inconsistencies and _plugin_instance:
+            _plugin_instance.logger.warning(f"数据一致性检查发现 {len(inconsistencies)} 个问题: {', '.join(inconsistencies[:3])}")
+            
+    except Exception as e:
+        if _plugin_instance:
+            _plugin_instance.logger.error(f"数据一致性验证失败: {e}")
