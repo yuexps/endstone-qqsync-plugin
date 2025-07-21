@@ -46,7 +46,7 @@ bedrock_server/plugins/qqsync_plugin/config.json
 
 ### QQ群内命令
 
-#### � 查询命令（所有用户可用）
+#### 🕸️ 查询命令（所有用户可用）
 - `/help` - 显示本帮助信息
 - `/list` - 查看在线玩家列表
 - `/tps` - 查看服务器TPS和MSPT
