@@ -28,6 +28,9 @@ import sys
 import re
 import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock, RLock
+import queue
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
 import websockets
 
@@ -77,6 +80,42 @@ class qqsync(Plugin):
         
         # 初始化日志缓存（避免重复日志输出）
         self._logged_left_players = set()  # 存储已记录退群日志的QQ号
+        
+        # 初始化文件写入优化
+        self._pending_data_save = False  # 是否有待保存的数据
+        self._last_save_time = 0  # 上次保存时间
+        self._save_interval = 0.02  # 保存间隔（20毫秒）
+        self._force_save_interval = 0.1  # 强制保存间隔（100毫秒）
+        
+        # 实时保存优化
+        self._auto_save_enabled = True  # 是否启用自动保存
+        self._save_on_change = True  # 数据变更时立即保存
+        self._max_pending_changes = 5  # 最大待保存变更数量
+        self._pending_changes_count = 0  # 当前待保存变更计数
+        
+        # 初始化多玩家处理优化
+        self._verification_queue = {}  # 验证码发送队列：{qq: 发送时间}
+        self._binding_rate_limit = {}  # 绑定频率限制：{qq: 上次绑定时间}
+        self._form_display_cache = {}  # 表单显示缓存：{player_name: 显示时间}
+        self._concurrent_bindings = set()  # 当前正在进行绑定的玩家
+        self._max_concurrent_bindings = 10  # 最大并发绑定数量
+        self._verification_rate_limit = 5  # 每分钟最多发送验证码数量
+        self._binding_cooldown = 30  # 绑定失败后的冷却时间（秒）
+
+        # 初始化多线程优化
+        self._file_io_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="qqsync-fileio")
+        self._data_processing_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="qqsync-data")
+        self._binding_data_lock = RLock()  # 数据访问锁
+        self._cache_lock = Lock()  # 缓存访问锁
+        self._save_queue = queue.Queue(maxsize=100)  # 保存任务队列
+        self._processing_tasks = {}  # 正在处理的任务缓存
+        
+        # 智能缓存优化
+        self._player_qq_cache = {}  # 玩家QQ缓存: {player_name: qq_number}
+        self._qq_player_cache = {}  # QQ玩家缓存: {qq_number: player_name}
+        self._permission_cache = {}  # 权限状态缓存: {player_name: is_visitor}
+        self._cache_expire_time = 300  # 缓存过期时间（5分钟）
+        self._last_cache_update = 0  # 上次缓存更新时间
 
         #注册事件
         self.register_events(self)
@@ -106,6 +145,30 @@ class qqsync(Plugin):
             self._schedule_group_check,
             delay=200,   # 首次执行延迟10秒，更早获取群成员列表
             period=12000  # 每10分钟执行一次
+        )
+        
+        # 启动定时数据保存任务（每20毫秒检查一次）
+        self.server.scheduler.run_task(
+            self,
+            self._schedule_data_save,
+            delay=1,     # 首次执行延迟50毫秒
+            period=1     # 每20毫秒检查一次（1 tick = 50ms，所以1 tick约等于20ms的频率）
+        )
+
+        # 启动周期性清理任务（多玩家优化）
+        self.server.scheduler.run_task(
+            self,
+            self._schedule_multi_player_cleanup,
+            delay=30,    # 30秒后首次执行
+            period=300   # 每5分钟执行一次清理
+        )
+
+        # 启动缓存优化和预加载任务
+        self.server.scheduler.run_task(
+            self,
+            self._preload_frequently_accessed_data,
+            delay=10,    # 10秒后首次执行
+            period=120   # 每2分钟执行一次预加载
         )
 
         startup_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已启用{ColorFormat.RESET}"
@@ -264,7 +327,7 @@ class qqsync(Plugin):
             self.logger.info(f"已清理 {len(invalid_bindings)} 个无效的QQ绑定")
         
         if data_updated:
-            self.save_binding_data()
+            self._trigger_realtime_save("初始化数据结构更新")
             if invalid_bindings:
                 self.logger.info("已更新绑定数据结构并清理无效绑定")
             else:
@@ -671,42 +734,176 @@ class qqsync(Plugin):
             self.logger.error(f"重新加载配置失败: {e}")
             return False
     
-    def save_binding_data(self):
-        """保存QQ绑定数据到文件"""
+    def _load_binding_data_from_file(self) -> dict:
+        """实时从文件读取QQ绑定数据"""
         try:
-            with open(self.binding_file, 'w', encoding='utf-8') as f:
-                json.dump(self._binding_data, f, indent=2, ensure_ascii=False)
-            self.logger.info("QQ绑定数据已保存")
+            if not self.binding_file.exists():
+                return {}
+            
+            with open(self.binding_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.error(f"实时读取QQ绑定数据失败: {e}")
+            # 如果文件读取失败，返回内存中的数据作为备份
+            return self._binding_data.copy() if hasattr(self, '_binding_data') else {}
+    
+    def _trigger_realtime_save(self, reason: str = "数据变更"):
+        """触发实时保存（智能判断保存策略）"""
+        if not self._auto_save_enabled:
+            return
+        
+        current_time = time.time()
+        self._pending_changes_count += 1
+        
+        # 关键操作立即保存
+        critical_reasons = ["绑定", "解绑", "封禁", "解封", "改名"]
+        should_force_save = any(critical in reason for critical in critical_reasons)
+        
+        # 判断是否需要立即保存
+        if (should_force_save or 
+            self._pending_changes_count >= self._max_pending_changes or
+            current_time - self._last_save_time > self._force_save_interval):
+            
+            self.save_binding_data(force_immediate=should_force_save)
+            self._pending_changes_count = 0
+            self.logger.debug(f"实时保存触发: {reason} (强制={should_force_save})")
+        else:
+            # 标记为待保存，等待下次定时保存
+            self._pending_data_save = True
+            self.logger.debug(f"数据变更标记: {reason} (待保存={self._pending_changes_count})")
+    
+    def save_binding_data(self, force_immediate=False):
+        """保存QQ绑定数据到文件（智能保存策略 + 线程池优化）"""
+        if force_immediate:
+            # 强制立即保存（同步）
+            self._save_binding_data_immediate()
+            self._pending_data_save = False
+            self._last_save_time = time.time()
+        else:
+            # 异步保存策略
+            self._pending_data_save = True
+            
+            # 如果距离上次保存时间过长，提交异步保存任务
+            current_time = time.time()
+            if current_time - self._last_save_time > self._force_save_interval:
+                self._submit_async_save_task()
+                self._last_save_time = current_time
+    
+    def _submit_async_save_task(self):
+        """提交异步保存任务到线程池"""
+        try:
+            # 创建数据副本以避免并发修改
+            with self._binding_data_lock:
+                data_snapshot = self._binding_data.copy()
+            
+            # 提交到文件I/O线程池
+            future = self._file_io_executor.submit(self._async_save_binding_data, data_snapshot)
+            future.add_done_callback(self._on_save_completed)
+            
+        except Exception as e:
+            self.logger.error(f"提交异步保存任务失败: {e}")
+            # 回退到同步保存
+            self._save_binding_data_immediate()
+    
+    def _async_save_binding_data(self, data_snapshot):
+        """在线程池中异步保存数据"""
+        try:
+            # 创建临时文件，避免写入过程中的数据损坏
+            temp_file = self.binding_file.with_suffix('.tmp')
+            
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(data_snapshot, f, indent=2, ensure_ascii=False)
+            
+            # 原子性替换文件
+            temp_file.replace(self.binding_file)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"异步保存QQ绑定数据失败: {e}")
+            # 清理临时文件
+            temp_file = self.binding_file.with_suffix('.tmp')
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
+            return False
+    
+    def _on_save_completed(self, future):
+        """保存任务完成回调"""
+        try:
+            success = future.result()
+            if success:
+                self._pending_data_save = False
+                self.logger.debug("异步数据保存完成")
+            else:
+                self.logger.warning("异步数据保存失败，将在下次尝试同步保存")
+        except Exception as e:
+            self.logger.error(f"异步保存回调处理失败: {e}")
+    
+    def _save_binding_data_immediate(self):
+        """立即保存绑定数据到文件（同步版本）"""
+        try:
+            with self._binding_data_lock:
+                # 创建临时文件，避免写入过程中的数据损坏
+                temp_file = self.binding_file.with_suffix('.tmp')
+                
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump(self._binding_data, f, indent=2, ensure_ascii=False)
+                
+                # 原子性替换文件
+                temp_file.replace(self.binding_file)
+            
         except Exception as e:
             self.logger.error(f"保存QQ绑定数据失败: {e}")
+            # 如果临时文件存在，清理它
+            temp_file = self.binding_file.with_suffix('.tmp')
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
     
     def is_player_bound(self, player_name: str, player_xuid: str = None) -> bool:
-        """检查玩家是否已绑定QQ（完整检查，包括XUID验证）"""
+        """检查玩家是否已绑定QQ（完整检查，包括XUID验证）- 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        
         # 如果提供了XUID，优先通过XUID查找玩家数据
         if player_xuid:
-            player_data = self.get_player_by_xuid(player_xuid)
+            player_data = self._get_player_by_xuid_from_data(player_xuid, binding_data)
             if player_data:
                 # 通过XUID找到了玩家数据，检查QQ字段
                 qq_number = player_data.get("qq", "")
                 return bool(qq_number and qq_number.strip())
             else:
                 # 通过XUID没有找到玩家数据，继续用玩家名查找（向后兼容）
-                if player_name in self._binding_data:
-                    qq_number = self._binding_data[player_name].get("qq", "")
+                if player_name in binding_data:
+                    qq_number = binding_data[player_name].get("qq", "")
                     return bool(qq_number and qq_number.strip())
                 return False
         
         # 仅基于玩家名的检查（向后兼容）
-        if player_name not in self._binding_data:
+        if player_name not in binding_data:
             return False
         
         # 检查QQ号是否有效（不为空）
-        qq_number = self._binding_data[player_name].get("qq", "")
+        qq_number = binding_data[player_name].get("qq", "")
         return bool(qq_number and qq_number.strip())
     
+    def _get_player_by_xuid_from_data(self, xuid: str, binding_data: dict) -> dict:
+        """从指定数据中根据XUID获取玩家绑定信息"""
+        for name, data in binding_data.items():
+            if data.get("xuid") == xuid:
+                return data
+        return {}
+    
     def is_player_bound_by_xuid(self, player_xuid: str) -> bool:
-        """基于XUID检查玩家是否已绑定QQ"""
-        player_data = self.get_player_by_xuid(player_xuid)
+        """基于XUID检查玩家是否已绑定QQ - 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        player_data = self._get_player_by_xuid_from_data(player_xuid, binding_data)
         if not player_data:
             return False
         
@@ -715,7 +912,10 @@ class qqsync(Plugin):
         return bool(qq_number and qq_number.strip())
     
     def get_complete_player_binding_status(self, player_name: str, player_xuid: str) -> dict:
-        """获取玩家完整的绑定状态信息"""
+        """获取玩家完整的绑定状态信息 - 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        
         result = {
             "is_bound": False,
             "qq_number": "",
@@ -727,12 +927,12 @@ class qqsync(Plugin):
         # 检查基于玩家名的绑定
         name_bound = False
         name_qq = ""
-        if player_name in self._binding_data:
-            name_qq = self._binding_data[player_name].get("qq", "")
+        if player_name in binding_data:
+            name_qq = binding_data[player_name].get("qq", "")
             name_bound = bool(name_qq and name_qq.strip())
         
         # 检查基于XUID的绑定
-        xuid_data = self.get_player_by_xuid(player_xuid)
+        xuid_data = self._get_player_by_xuid_from_data(player_xuid, binding_data)
         xuid_bound = False
         xuid_qq = ""
         if xuid_data:
@@ -766,26 +966,119 @@ class qqsync(Plugin):
         return result
     
     def get_player_qq(self, player_name: str) -> str:
-        """获取玩家绑定的QQ号"""
-        return self._binding_data.get(player_name, {}).get("qq", "")
+        """获取玩家绑定的QQ号 - 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        return binding_data.get(player_name, {}).get("qq", "")
     
     def get_qq_player(self, qq_number: str) -> str:
-        """根据QQ号获取绑定的玩家名"""
-        for name, data in self._binding_data.items():
+        """根据QQ号获取绑定的玩家名 - 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        
+        for name, data in binding_data.items():
+            # 只检查当前有效的QQ绑定
+            current_qq = data.get("qq", "")
+            if current_qq and current_qq.strip() == qq_number:
+                return name
+        
+        return ""
+    
+    def _invalidate_cache(self, player_name: str = None, qq_number: str = None):
+        """使相关缓存失效"""
+        with self._cache_lock:
+            if player_name and player_name in self._player_qq_cache:
+                del self._player_qq_cache[player_name]
+            if player_name and player_name in self._permission_cache:
+                del self._permission_cache[player_name]
+            if qq_number and qq_number in self._qq_player_cache:
+                del self._qq_player_cache[qq_number]
+    
+    def _preload_frequently_accessed_data(self):
+        """预加载频繁访问的数据"""
+        try:
+            # 在后台线程中预加载在线玩家的数据
+            online_players = [player.name for player in self.server.online_players]
+            
+            if online_players:
+                future = self._data_processing_executor.submit(self._batch_preload_player_data, online_players)
+                future.add_done_callback(self._on_preload_completed)
+                
+        except Exception as e:
+            self.logger.error(f"预加载数据失败: {e}")
+    
+    def _batch_preload_player_data(self, player_names):
+        """批量预加载玩家数据"""
+        preloaded = {"qq_cache": {}, "permission_cache": {}}
+        
+        with self._binding_data_lock:
+            for player_name in player_names:
+                if player_name in self._binding_data:
+                    qq_number = self._binding_data[player_name].get("qq", "")
+                    preloaded["qq_cache"][player_name] = qq_number
+                    
+                    # 预计算权限状态
+                    is_visitor = self._calculate_visitor_status(player_name)
+                    preloaded["permission_cache"][player_name] = is_visitor
+        
+        return preloaded
+    
+    def _calculate_visitor_status(self, player_name: str) -> bool:
+        """计算玩家访客状态（内部方法，不使用缓存）"""
+        if not self.get_config("force_bind_qq", True):
+            return False
+        
+        if self.is_player_banned(player_name):
+            return True
+        
+        player_data = self._binding_data.get(player_name, {})
+        qq_number = player_data.get("qq", "")
+        if not qq_number or not qq_number.strip():
+            return True
+        
+        if (self.get_config("check_group_member", True) and 
+            hasattr(self, '_group_members') and self._group_members):
+            if qq_number not in self._group_members:
+                return True
+        
+        return False
+    
+    def _on_preload_completed(self, future):
+        """预加载完成回调"""
+        try:
+            preloaded_data = future.result()
+            
+            # 更新缓存
+            current_time = time.time()
+            with self._cache_lock:
+                self._player_qq_cache.update(preloaded_data["qq_cache"])
+                self._permission_cache.update(preloaded_data["permission_cache"])
+                self._last_cache_update = current_time
+            
+            self.logger.debug(f"预加载完成: {len(preloaded_data['qq_cache'])} 个玩家数据")
+            
+        except Exception as e:
+            self.logger.error(f"预加载回调处理失败: {e}")
+    
+    def get_qq_player_history(self, qq_number: str) -> str:
+        """根据QQ号获取历史绑定的玩家名（包括已解绑的）- 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        
+        for name, data in binding_data.items():
             # 首先检查当前绑定的QQ号
             if data.get("qq") == qq_number:
                 return name
-            # 如果没找到，检查原QQ号（用于被解绑或封禁的玩家）
+            # 检查原QQ号（用于被解绑或封禁的玩家历史查询）
             if data.get("original_qq") == qq_number:
                 return name
         return ""
     
     def get_player_by_xuid(self, xuid: str) -> dict:
-        """根据XUID获取玩家绑定信息"""
-        for name, data in self._binding_data.items():
-            if data.get("xuid") == xuid:
-                return data
-        return {}
+        """根据XUID获取玩家绑定信息 - 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        return self._get_player_by_xuid_from_data(xuid, binding_data)
     
     def update_player_name(self, old_name: str, new_name: str, xuid: str):
         """更新玩家名称（处理改名情况）"""
@@ -800,7 +1093,7 @@ class qqsync(Plugin):
             del self._binding_data[old_name]
             self._binding_data[new_name] = player_data
             
-            self.save_binding_data()
+            self._trigger_realtime_save(f"玩家改名: {old_name} → {new_name}")
             self.logger.info(f"玩家改名: {old_name} → {new_name} (XUID: {xuid})")
             
             # 更新QQ群昵称（仅在启用QQ绑定且同步群昵称时）
@@ -835,86 +1128,112 @@ class qqsync(Plugin):
         player_data["unbind_by"] = admin_name  # 记录解绑操作者
         player_data["original_qq"] = original_qq  # 保留原QQ号（用于历史记录）
         
-        self.save_binding_data()
+        self._trigger_realtime_save(f"解绑QQ: {player_name} (原QQ: {original_qq})")
         self.logger.info(f"玩家 {player_name} 的QQ绑定已被 {admin_name} 解除 (原QQ: {original_qq})，游戏数据已保留")
         return True
     
     def bind_player_qq(self, player_name: str, player_xuid: str, qq_number: str):
-        """绑定玩家QQ"""
+        """绑定玩家QQ（线程安全）"""
         # 验证QQ号不为空
         if not qq_number or not qq_number.strip():
             self.logger.error(f"尝试绑定空QQ号给玩家 {player_name}，操作被拒绝")
             return False
         
-        # 检查是否已有该玩家的数据（重新绑定的情况）
-        if player_name in self._binding_data:
-            # 保留现有的游戏数据，更新绑定信息
-            player_data = self._binding_data[player_name]
-            old_qq = player_data.get("qq", "")
-            
-            # 更新绑定信息
-            player_data["qq"] = qq_number.strip()
-            player_data["xuid"] = player_xuid
-            
-            if old_qq:
-                # 重新绑定
-                player_data["rebind_time"] = int(time.time())
-                player_data["previous_qq"] = old_qq
-                self.logger.info(f"玩家 {player_name} 重新绑定QQ: {old_qq} → {qq_number}")
-            else:
-                # 首次绑定或解绑后重新绑定
-                if "unbind_time" in player_data:
+        with self._binding_data_lock:
+            # 检查是否已有该玩家的数据（重新绑定的情况）
+            if player_name in self._binding_data:
+                # 保留现有的游戏数据，更新绑定信息
+                player_data = self._binding_data[player_name]
+                old_qq = player_data.get("qq", "")
+                
+                # 更新绑定信息
+                player_data["qq"] = qq_number.strip()
+                player_data["xuid"] = player_xuid
+                
+                if old_qq:
+                    # 重新绑定
                     player_data["rebind_time"] = int(time.time())
-                    self.logger.info(f"玩家 {player_name} 解绑后重新绑定QQ: {qq_number}")
+                    player_data["previous_qq"] = old_qq
+                    self.logger.info(f"玩家 {player_name} 重新绑定QQ: {old_qq} → {qq_number}")
                 else:
-                    player_data["bind_time"] = int(time.time())
-                    self.logger.info(f"玩家 {player_name} 首次绑定QQ: {qq_number}")
-        else:
-            # 全新的玩家数据
-            self._binding_data[player_name] = {
-                "name": player_name,
-                "xuid": player_xuid,
-                "qq": qq_number.strip(),
-                "bind_time": int(time.time()),
-                "total_playtime": 0,  # 总在线时间（秒）
-                "last_join_time": None,  # 最后加入时间
-                "last_quit_time": None,  # 最后离开时间
-                "session_count": 0  # 游戏会话次数
-            }
-            self.logger.info(f"玩家 {player_name} 已绑定QQ: {qq_number}")
+                    # 首次绑定或解绑后重新绑定
+                    if "unbind_time" in player_data:
+                        player_data["rebind_time"] = int(time.time())
+                        self.logger.info(f"玩家 {player_name} 解绑后重新绑定QQ: {qq_number}")
+                    else:
+                        player_data["bind_time"] = int(time.time())
+                        self.logger.info(f"玩家 {player_name} 首次绑定QQ: {qq_number}")
+            else:
+                # 全新的玩家数据
+                self._binding_data[player_name] = {
+                    "name": player_name,
+                    "xuid": player_xuid,
+                    "qq": qq_number.strip(),
+                    "bind_time": int(time.time()),
+                    "total_playtime": 0,  # 总在线时间（秒）
+                    "last_join_time": None,  # 最后加入时间
+                    "last_quit_time": None,  # 最后离开时间
+                    "session_count": 0  # 游戏会话次数
+                }
+                self.logger.info(f"玩家 {player_name} 已绑定QQ: {qq_number}")
         
-        self.save_binding_data()
+        self._trigger_realtime_save(f"绑定QQ: {player_name} → {qq_number}")
+        
+        # 使相关缓存失效
+        self._invalidate_cache(player_name=player_name, qq_number=qq_number.strip())
+        
         return True
     
-    def update_player_join(self, player_name: str):
-        """更新玩家加入时间"""
-        if player_name in self._binding_data:
-            current_time = int(time.time())
-            self._binding_data[player_name]["last_join_time"] = current_time
-            self._binding_data[player_name]["session_count"] = self._binding_data[player_name].get("session_count", 0) + 1
-            self.save_binding_data()
+    def update_player_join(self, player_name: str, player_xuid: str = None):
+        """更新玩家加入时间（仅限已绑定QQ的玩家）"""
+        # 只有已绑定QQ的玩家才统计数据
+        if player_name not in self._binding_data:
+            return  # 未绑定QQ的玩家不创建统计记录
+        
+        # 检查玩家是否已绑定QQ
+        if not self._binding_data[player_name].get("qq", "").strip():
+            return  # 未绑定QQ的玩家不更新统计
+        
+        current_time = int(time.time())
+        self._binding_data[player_name]["last_join_time"] = current_time
+        self._binding_data[player_name]["session_count"] = self._binding_data[player_name].get("session_count", 0) + 1
+        
+        # 更新XUID（如果提供了新的XUID）
+        if player_xuid and not self._binding_data[player_name].get("xuid"):
+            self._binding_data[player_name]["xuid"] = player_xuid
+        
+        self._trigger_realtime_save(f"玩家加入: {player_name}")
     
     def update_player_quit(self, player_name: str):
-        """更新玩家离开时间和总在线时间"""
-        if player_name in self._binding_data:
-            current_time = int(time.time())
-            last_join = self._binding_data[player_name].get("last_join_time")
-            
-            if last_join:
-                # 计算本次会话时间
-                session_time = current_time - last_join
-                if session_time > 0:  # 确保时间有效
-                    self._binding_data[player_name]["total_playtime"] = self._binding_data[player_name].get("total_playtime", 0) + session_time
-            
-            self._binding_data[player_name]["last_quit_time"] = current_time
-            self.save_binding_data()
+        """更新玩家离开时间和总在线时间（仅限已绑定QQ的玩家）"""
+        # 只有已绑定QQ的玩家才统计数据
+        if player_name not in self._binding_data:
+            return  # 未绑定QQ的玩家不创建统计记录
+        
+        # 检查玩家是否已绑定QQ
+        if not self._binding_data[player_name].get("qq", "").strip():
+            return  # 未绑定QQ的玩家不更新统计
+        
+        current_time = int(time.time())
+        last_join = self._binding_data[player_name].get("last_join_time")
+        
+        if last_join:
+            # 计算本次会话时间
+            session_time = current_time - last_join
+            if session_time > 0:  # 确保时间有效
+                self._binding_data[player_name]["total_playtime"] = self._binding_data[player_name].get("total_playtime", 0) + session_time
+        
+        self._binding_data[player_name]["last_quit_time"] = current_time
+        self._trigger_realtime_save(f"玩家离开: {player_name}")
     
     def get_player_binding_history(self, player_name: str) -> dict:
-        """获取玩家绑定历史信息"""
-        if player_name not in self._binding_data:
+        """获取玩家绑定历史信息 - 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        if player_name not in binding_data:
             return {}
         
-        data = self._binding_data[player_name]
+        data = binding_data[player_name]
         
         history = {
             "current_qq": data.get("qq", ""),
@@ -944,11 +1263,18 @@ class qqsync(Plugin):
         return history
 
     def get_player_playtime_info(self, player_name: str) -> dict:
-        """获取玩家在线时间信息"""
-        if player_name not in self._binding_data:
+        """获取玩家在线时间信息（仅限已绑定QQ的玩家）- 实时从文件读取"""
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        if player_name not in binding_data:
             return {}
         
-        data = self._binding_data[player_name]
+        data = binding_data[player_name]
+        
+        # 检查玩家是否已绑定QQ
+        if not data.get("qq", "").strip():
+            return {}  # 未绑定QQ的玩家不返回统计信息
+        
         current_time = int(time.time())
         
         # 计算总在线时间
@@ -982,14 +1308,16 @@ class qqsync(Plugin):
         }
     
     def is_player_banned(self, player_name: str) -> bool:
-        """检查玩家是否被封禁"""
+        """检查玩家是否被封禁 - 实时从文件读取"""
         # 如果未启用强制绑定QQ，封禁功能也被禁用
         if not self.get_config("force_bind_qq", True):
             return False
-            
-        if player_name not in self._binding_data:
+        
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
+        if player_name not in binding_data:
             return False
-        return self._binding_data[player_name].get("is_banned", False)
+        return binding_data[player_name].get("is_banned", False)
     
     def ban_player(self, player_name: str, admin_name: str = "system", reason: str = "") -> bool:
         """封禁玩家，禁止QQ绑定"""
@@ -1028,7 +1356,7 @@ class qqsync(Plugin):
             player_data["original_qq"] = original_qq
             self.logger.info(f"玩家 {player_name} 被封禁时自动解除QQ绑定 (原QQ: {original_qq})")
         
-        self.save_binding_data()
+        self._trigger_realtime_save(f"封禁玩家: {player_name} (原因: {reason or '管理员封禁'})")
         self.logger.info(f"玩家 {player_name} 已被 {admin_name} 封禁，原因：{reason or '管理员封禁'}")
         return True
     
@@ -1051,18 +1379,20 @@ class qqsync(Plugin):
         player_data["unban_time"] = int(time.time())
         player_data["unban_by"] = admin_name
         
-        self.save_binding_data()
+        self._trigger_realtime_save(f"解封玩家: {player_name}")
         self.logger.info(f"玩家 {player_name} 已被 {admin_name} 解封")
         return True
     
     def get_banned_players(self) -> list:
-        """获取所有被封禁的玩家列表"""
+        """获取所有被封禁的玩家列表 - 实时从文件读取"""
         # 如果未启用强制绑定QQ，返回空列表
         if not self.get_config("force_bind_qq", True):
             return []
-            
+        
+        # 实时从文件读取最新数据
+        binding_data = self._load_binding_data_from_file()
         banned_players = []
-        for player_name, data in self._binding_data.items():
+        for player_name, data in binding_data.items():
             if data.get("is_banned", False):
                 banned_players.append({
                     "name": player_name,
@@ -1096,6 +1426,11 @@ class qqsync(Plugin):
     def show_qq_binding_form(self, player):
         """显示QQ绑定表单"""
         try:
+            # 多玩家优化：检查是否可以显示绑定表单（防止重复显示）
+            if not self._can_show_form(player.name):
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}绑定表单显示过于频繁，请稍后再试{ColorFormat.RESET}")
+                return
+            
             # 根据是否启用强制绑定显示不同的提示信息
             if self.get_config("force_bind_qq", True):
                 form_labels = [
@@ -1188,10 +1523,19 @@ class qqsync(Plugin):
                     target_group = self.get_config("target_group")
                     player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}目标QQ群：{target_group}{ColorFormat.RESET}")
             
+            # 检查是否可以发送验证码（多玩家处理优化）
+            can_send, error_msg = self._can_send_verification(qq_input)
+            if not can_send:
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}[限制] {error_msg}{ColorFormat.RESET}")
+                return
+            
+            # 注册验证码发送尝试
+            self._register_verification_attempt(qq_input, player.name)
+            
             # 生成验证码
             verification_code = str(random.randint(100000, 999999))
             
-            # 存储待验证信息
+            # 存储待验证信息（优先内存操作）
             _pending_verifications[player.name] = {
                 "qq": qq_input,
                 "code": verification_code,
@@ -1204,19 +1548,33 @@ class qqsync(Plugin):
                 "player_name": player.name
             }
             
-            # 发送验证码到QQ
+            # 立即发送验证码到QQ（不等待文件IO）
             if _current_ws:
-                asyncio.run_coroutine_threadsafe(
-                    send_private_msg(_current_ws, user_id=int(qq_input), text=f"Minecraft服务器QQ绑定验证\n\n玩家名: {player.name}\n验证码: {verification_code}\n\n请在游戏中输入此验证码完成绑定。\n或QQ群输入/verify {verification_code} 完成绑定\n验证码5分钟内有效。"),
-                    self._loop
-                )
-                
-                # 显示验证码输入表单
-                self.server.scheduler.run_task(
-                    self,
-                    lambda: self.show_verification_form(player),
-                    delay=10  # 0.5秒延迟
-                )
+                try:
+                    # 使用异步发送，不阻塞当前线程
+                    verification_text = f"QQsync-群服互通 绑定验证\n\n玩家名: {player.name}\n验证码: {verification_code}\n\n请在游戏中输入此验证码完成绑定。\n或QQ群输入/verify {verification_code} 完成绑定\n验证码5分钟内有效。\n\n当前绑定队列：{len(self._concurrent_bindings)}/{self._max_concurrent_bindings}"
+                    
+                    asyncio.run_coroutine_threadsafe(
+                        send_private_msg(_current_ws, user_id=int(qq_input), text=verification_text),
+                        self._loop
+                    )
+                    
+                    # 通知玩家验证码已发送
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}验证码已发送到QQ {qq_input}！{ColorFormat.RESET}")
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请检查QQ私聊消息{ColorFormat.RESET}")
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}当前绑定队列：{len(self._concurrent_bindings)}/{self._max_concurrent_bindings}{ColorFormat.RESET}")
+                    
+                    # 延迟显示验证码输入表单（减少阻塞）
+                    self.server.scheduler.run_task(
+                        self,
+                        lambda: self.show_verification_form(player),
+                        delay=3  # 降低延迟，提高响应速度
+                    )
+                except Exception as e:
+                    self.logger.error(f"发送验证码失败: {e}")
+                    self._unregister_verification_attempt(qq_input, player.name, False)
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}发送验证码失败，请稍后重试！{ColorFormat.RESET}")
+                    return
             else:
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}服务器未连接到QQ，无法发送验证码！{ColorFormat.RESET}")
             
@@ -1314,13 +1672,14 @@ class qqsync(Plugin):
                 
                 # 恢复玩家权限（从访客权限升级为正常权限）
                 if self.get_config("force_bind_qq", True):
+                    # 使用异步任务避免阻塞
                     self.server.scheduler.run_task(
                         self,
                         lambda: self.restore_player_permissions(player),
-                        delay=5  # 短暂延迟确保绑定数据已保存
+                        delay=2  # 短暂延迟确保绑定数据操作完成
                     )
                 
-                # 设置QQ群昵称为玩家名（仅在启用QQ绑定且同步群昵称时）
+                # 异步设置QQ群昵称为玩家名（不阻塞主流程）
                 if (_current_ws and 
                     self.get_config("force_bind_qq", True) and 
                     self.get_config("sync_group_card", True)):
@@ -1330,10 +1689,10 @@ class qqsync(Plugin):
                         self._loop
                     )
                 
-                # 通知QQ群
+                # 异步通知QQ群（不阻塞主流程）
                 if _current_ws:
                     asyncio.run_coroutine_threadsafe(
-                        send_group_msg(_current_ws, group_id=self.get_config("target_group"), text=f"玩家 {player.name} 已完成QQ绑定"),
+                        send_group_msg(_current_ws, group_id=self.get_config("target_group"), text=f"🎉 玩家 {player.name} 已完成QQ绑定！"),
                         self._loop
                     )
             else:
@@ -1375,6 +1734,81 @@ class qqsync(Plugin):
         
         if expired_players or expired_qq:
             self.logger.info(f"清理过期验证码: {len(expired_players)} 个待验证玩家, {len(expired_qq)} 个验证码")
+        
+        # 清理过期的多玩家处理缓存
+        self._cleanup_expired_caches()
+    
+    def _cleanup_expired_caches(self):
+        """清理过期的多玩家处理缓存"""
+        current_time = time.time()
+        
+        # 清理验证码发送队列中的过期记录（1分钟过期）
+        expired_queue = [qq for qq, send_time in self._verification_queue.items() 
+                        if current_time - send_time > 60]
+        for qq in expired_queue:
+            del self._verification_queue[qq]
+        
+        # 清理绑定频率限制中的过期记录
+        expired_bindings = [qq for qq, bind_time in self._binding_rate_limit.items() 
+                           if current_time - bind_time > self._binding_cooldown]
+        for qq in expired_bindings:
+            del self._binding_rate_limit[qq]
+        
+        # 清理表单显示缓存中的过期记录（5分钟过期）
+        expired_forms = [player for player, display_time in self._form_display_cache.items() 
+                        if current_time - display_time > 300]
+        for player in expired_forms:
+            del self._form_display_cache[player]
+    
+    def _can_send_verification(self, qq_number: str) -> tuple[bool, str]:
+        """检查是否可以发送验证码"""
+        current_time = time.time()
+        
+        # 检查该QQ号最近1分钟内发送验证码的次数
+        recent_sends = sum(1 for send_time in self._verification_queue.values() 
+                          if current_time - send_time < 60)
+        
+        if recent_sends >= self._verification_rate_limit:
+            return False, f"系统繁忙，请稍后再试（当前有{recent_sends}个验证请求正在处理）"
+        
+        # 检查该QQ号是否在冷却期内
+        if qq_number in self._binding_rate_limit:
+            cooldown_remaining = self._binding_cooldown - (current_time - self._binding_rate_limit[qq_number])
+            if cooldown_remaining > 0:
+                return False, f"请等待{int(cooldown_remaining)}秒后再次尝试"
+        
+        # 检查并发绑定数量
+        if len(self._concurrent_bindings) >= self._max_concurrent_bindings:
+            return False, f"当前绑定请求过多，请稍后再试（{len(self._concurrent_bindings)}/{self._max_concurrent_bindings}）"
+        
+        return True, ""
+    
+    def _register_verification_attempt(self, qq_number: str, player_name: str):
+        """注册验证码发送尝试"""
+        current_time = time.time()
+        self._verification_queue[qq_number] = current_time
+        self._concurrent_bindings.add(player_name)
+    
+    def _unregister_verification_attempt(self, qq_number: str, player_name: str, success: bool = True):
+        """注销验证码发送尝试"""
+        if not success:
+            # 绑定失败，记录冷却时间
+            self._binding_rate_limit[qq_number] = time.time()
+        
+        # 从并发绑定集合中移除
+        self._concurrent_bindings.discard(player_name)
+    
+    def _can_show_form(self, player_name: str) -> bool:
+        """检查是否可以显示绑定表单（防止重复显示）"""
+        current_time = time.time()
+        
+        if player_name in self._form_display_cache:
+            # 如果5分钟内已显示过表单，不重复显示
+            if current_time - self._form_display_cache[player_name] < 300:
+                return False
+        
+        self._form_display_cache[player_name] = current_time
+        return True
     
     def _schedule_cleanup(self):
         """定时清理任务"""
@@ -1383,6 +1817,23 @@ class qqsync(Plugin):
             self.cleanup_expired_verifications()
         except Exception as e:
             self.logger.error(f"定时清理任务出错: {e}")
+    
+    def _schedule_data_save(self):
+        """定时数据保存任务（高频保存策略 - 每20毫秒）"""
+        try:
+            current_time = time.time()
+            
+            # 如果有待保存的数据，立即保存（20毫秒内）
+            if self._pending_data_save:
+                time_since_last_save = current_time - self._last_save_time
+                
+                # 保存条件：有待保存数据且距离上次保存超过20毫秒
+                if time_since_last_save >= self._save_interval:
+                    self._save_binding_data_immediate()
+                    self._pending_data_save = False
+                    self._last_save_time = current_time
+        except Exception as e:
+            self.logger.error(f"高频数据保存任务出错: {e}")
     
     def _schedule_group_check(self):
         """定时群成员检查任务"""
@@ -1396,25 +1847,175 @@ class qqsync(Plugin):
             self.logger.error(f"群成员检查任务出错: {e}")
     
     def _check_bound_players_in_group(self):
-        """检查已绑定的玩家是否仍在群中"""
+        """检查已绑定的玩家是否仍在群中（批量处理优化）"""
         if not self.get_config("force_bind_qq", True) or not self.get_config("check_group_member", True):
             return  # 如果未启用强制绑定或退群检测，不检查
         
-        # 检查所有在线的已绑定玩家
+        # 使用线程池进行批量检查
+        players_to_check = []
         for player in self.server.online_players:
             if self.is_player_bound(player.name, player.xuid):
                 player_qq = self.get_player_qq(player.name)
-                
-                # 如果玩家QQ不在群成员缓存中，重新应用权限
                 if player_qq and player_qq not in self._group_members:
-                    self.logger.info(f"检测到玩家 {player.name} (QQ: {player_qq}) 已退群，应用访客权限")
+                    players_to_check.append((player, player_qq))
+        
+        if players_to_check:
+            # 提交批量权限处理任务
+            future = self._data_processing_executor.submit(self._batch_process_left_players, players_to_check)
+            future.add_done_callback(self._on_batch_permission_update_completed)
+    
+    def _batch_process_left_players(self, players_to_check):
+        """批量处理退群玩家"""
+        processed_players = []
+        
+        for player, player_qq in players_to_check:
+            try:
+                self.logger.info(f"检测到玩家 {player.name} (QQ: {player_qq}) 已退群，准备应用访客权限")
+                processed_players.append(player)
+            except Exception as e:
+                self.logger.error(f"处理退群玩家 {player.name} 时出错: {e}")
+        
+        return processed_players
+    
+    def _on_batch_permission_update_completed(self, future):
+        """批量权限更新完成回调"""
+        try:
+            processed_players = future.result()
+            
+            # 在主线程中应用权限更改
+            for player in processed_players:
+                self.server.scheduler.run_task(
+                    self,
+                    lambda p=player: self._handle_player_left_group(p),
+                    delay=1
+                )
+                
+        except Exception as e:
+            self.logger.error(f"批量权限更新回调失败: {e}")
                     
-                    # 设置为访客权限
-                    self.server.scheduler.run_task(
-                        self,
-                        lambda p=player: self._handle_player_left_group(p),
-                        delay=1
-                    )
+    def _schedule_multi_player_cleanup(self):
+        """多玩家优化的周期清理任务（使用线程池）"""
+        try:
+            # 提交清理任务到数据处理线程池
+            cleanup_future = self._data_processing_executor.submit(self._perform_cleanup_tasks)
+            cleanup_future.add_done_callback(self._on_cleanup_completed)
+            
+        except Exception as e:
+            self.logger.error(f"提交多玩家清理任务失败: {e}")
+            # 回退到同步清理
+            self._perform_cleanup_tasks_sync()
+    
+    def _perform_cleanup_tasks(self):
+        """在线程池中执行清理任务"""
+        try:
+            current_time = time.time()
+            cleanup_stats = {
+                "expired_queue": 0,
+                "expired_rate_limit": 0,
+                "expired_form_cache": 0,
+                "offline_bindings": 0
+            }
+            
+            # 使用锁保护缓存清理
+            with self._cache_lock:
+                # 清理过期的验证码发送记录
+                expired_queue = []
+                for qq_number, timestamp in self._verification_queue.items():
+                    if current_time - timestamp > 600:  # 10分钟过期
+                        expired_queue.append(qq_number)
+                for qq_number in expired_queue:
+                    del self._verification_queue[qq_number]
+                cleanup_stats["expired_queue"] = len(expired_queue)
+                
+                # 清理过期的冷却时间记录
+                expired_rate_limit = []
+                for qq_number, timestamp in self._binding_rate_limit.items():
+                    if current_time - timestamp > 300:  # 5分钟后移除冷却记录
+                        expired_rate_limit.append(qq_number)
+                for qq_number in expired_rate_limit:
+                    del self._binding_rate_limit[qq_number]
+                cleanup_stats["expired_rate_limit"] = len(expired_rate_limit)
+                
+                # 清理过期的表单显示缓存
+                expired_form_cache = []
+                for player_name, timestamp in self._form_display_cache.items():
+                    if current_time - timestamp > 600:  # 10分钟后移除表单缓存
+                        expired_form_cache.append(player_name)
+                for player_name in expired_form_cache:
+                    del self._form_display_cache[player_name]
+                cleanup_stats["expired_form_cache"] = len(expired_form_cache)
+                
+                # 清理已离线玩家的并发绑定记录
+                online_players = {player.name for player in self.server.online_players}
+                offline_bindings = self._concurrent_bindings - online_players
+                self._concurrent_bindings -= offline_bindings
+                cleanup_stats["offline_bindings"] = len(offline_bindings)
+            
+            # 执行过期验证码清理（这个需要访问全局变量，在主线程中执行）
+            self.server.scheduler.run_task(
+                self,
+                self.cleanup_expired_verifications,
+                delay=1
+            )
+            
+            return cleanup_stats
+            
+        except Exception as e:
+            self.logger.error(f"执行清理任务失败: {e}")
+            return None
+    
+    def _on_cleanup_completed(self, future):
+        """清理任务完成回调"""
+        try:
+            cleanup_stats = future.result()
+            if cleanup_stats and any(cleanup_stats.values()):
+                self.logger.info(f"多玩家优化清理完成: 验证队列:{cleanup_stats['expired_queue']}, 冷却记录:{cleanup_stats['expired_rate_limit']}, 表单缓存:{cleanup_stats['expired_form_cache']}, 离线绑定:{cleanup_stats['offline_bindings']}")
+        except Exception as e:
+            self.logger.error(f"清理任务回调处理失败: {e}")
+    
+    def _perform_cleanup_tasks_sync(self):
+        """同步版本的清理任务（回退方案）"""
+        try:
+            current_time = time.time()
+            
+            # 清理过期的验证码发送记录
+            expired_queue = []
+            for qq_number, timestamp in self._verification_queue.items():
+                if current_time - timestamp > 600:  # 10分钟过期
+                    expired_queue.append(qq_number)
+            for qq_number in expired_queue:
+                del self._verification_queue[qq_number]
+            
+            # 清理过期的冷却时间记录
+            expired_rate_limit = []
+            for qq_number, timestamp in self._binding_rate_limit.items():
+                if current_time - timestamp > 300:  # 5分钟后移除冷却记录
+                    expired_rate_limit.append(qq_number)
+            for qq_number in expired_rate_limit:
+                del self._binding_rate_limit[qq_number]
+            
+            # 清理过期的表单显示缓存
+            expired_form_cache = []
+            for player_name, timestamp in self._form_display_cache.items():
+                if current_time - timestamp > 600:  # 10分钟后移除表单缓存
+                    expired_form_cache.append(player_name)
+            for player_name in expired_form_cache:
+                del self._form_display_cache[player_name]
+            
+            # 清理已离线玩家的并发绑定记录
+            online_players = {player.name for player in self.server.online_players}
+            offline_bindings = self._concurrent_bindings - online_players
+            self._concurrent_bindings -= offline_bindings
+            
+            # 执行过期验证码清理
+            self.cleanup_expired_verifications()
+            
+            # 记录清理日志（仅在有清理内容时）
+            if expired_queue or expired_rate_limit or expired_form_cache or offline_bindings:
+                self.logger.info(f"同步清理完成: 验证队列:{len(expired_queue)}, 冷却记录:{len(expired_rate_limit)}, 表单缓存:{len(expired_form_cache)}, 离线绑定:{len(offline_bindings)}")
+            
+        except Exception as e:
+            self.logger.error(f"同步清理任务出错: {e}")
     
     def _handle_player_left_group(self, player):
         """处理玩家退群的情况"""
@@ -1443,6 +2044,11 @@ class qqsync(Plugin):
         shutdown_msg = f"{ColorFormat.RED}qqsync_plugin {ColorFormat.RED}卸载{ColorFormat.RESET}"
         self.logger.info(shutdown_msg)
         
+        # 保存所有待保存的数据
+        if hasattr(self, '_pending_data_save') and self._pending_data_save:
+            self.logger.info("插件关闭前保存待保存的绑定数据...")
+            self._save_binding_data_immediate()
+        
         # 清理所有权限附件
         if hasattr(self, '_player_attachments'):
             for player_name, attachment in self._player_attachments.items():
@@ -1452,6 +2058,15 @@ class qqsync(Plugin):
                 except Exception as e:
                     self.logger.warning(f"清理玩家 {player_name} 权限附件失败: {e}")
             self._player_attachments.clear()
+        
+        # 关闭线程池
+        if hasattr(self, '_file_io_executor'):
+            self.logger.info("关闭文件I/O线程池...")
+            self._file_io_executor.shutdown(wait=True, timeout=5)
+        
+        if hasattr(self, '_data_processing_executor'):
+            self.logger.info("关闭数据处理线程池...")
+            self._data_processing_executor.shutdown(wait=True, timeout=5)
         
         # 优雅关闭
         if hasattr(self, "_task"):
@@ -1493,7 +2108,7 @@ class qqsync(Plugin):
                 player_data["xuid"] = player_xuid
                 player_data["last_xuid_update"] = int(time.time())
                 self._binding_data[player_name] = player_data
-                self.save_binding_data()
+                self._trigger_realtime_save(f"XUID更新: {player_name}")
                 self.logger.info(f"已更新玩家 {player_name} 的XUID: {current_xuid} → {player_xuid}")
                 
                 # 发送绑定完成消息给玩家
@@ -1535,9 +2150,8 @@ class qqsync(Plugin):
                     delay=20  # 1秒 = 20 ticks
                 )
         
-        # 更新玩家加入时间（如果已绑定）
-        if self.is_player_bound(player_name, player_xuid):
-            self.update_player_join(player_name)
+        # 更新玩家加入时间（仅限已绑定QQ的玩家）
+        self.update_player_join(player_name, player_xuid)
         
         # 应用权限策略（强制绑定模式下的权限控制）
         # 延迟应用权限，确保玩家完全加载
@@ -1569,9 +2183,8 @@ class qqsync(Plugin):
     def on_player_quit(self, event: PlayerQuitEvent) -> None:
         player_name = event.player.name
         
-        # 更新玩家离开时间（如果已绑定）
-        if self.is_player_bound(player_name):
-            self.update_player_quit(player_name)
+        # 更新玩家离开时间（仅限已绑定QQ的玩家）
+        self.update_player_quit(player_name)
         
         # 清理权限附件
         self.cleanup_player_permissions(player_name)
@@ -2036,7 +2649,7 @@ async def handle_message(ws, data: dict):
         
         if force_bind_enabled:
             # 如果启用强制绑定，显示完整的绑定相关功能
-            base_help = "QQsync群服互通 - 命令：\n\n[查询命令]：\n/help — 显示本帮助信息\n/list — 查看在线玩家列表\n/tps — 查看服务器性能指标\n/info — 查看服务器综合信息\n/bindqq — 查看QQ绑定状态\n/verify <验证码> — 验证QQ绑定"
+            base_help = "QQsync群服互通 - 命令：\n\n[查询命令]：\n/help — 显示本帮助信息\n/list — 查看在线玩家列表\n/tps — 查看服务器性能指标\n/info — 查看服务器综合信息\n/bindqq — 查看您的详细账户信息\n/verify <验证码> — 验证QQ绑定"
             
             if is_admin:
                 # 管理员可以看到管理命令
@@ -2171,10 +2784,116 @@ async def handle_message(ws, data: dict):
             reply = "该命令仅限管理员使用"
 
     elif cmd == "bindqq" and len(cmd_parts) == 1:
-        # 查看绑定状态
+        # 查看绑定状态（详细信息）
         bound_player = _plugin_instance.get_qq_player(user_id)
         if bound_player:
-            reply = f"您的QQ已绑定游戏角色: {bound_player}"
+            # 获取玩家详细数据
+            player_data = _plugin_instance._binding_data.get(bound_player, {})
+            
+            # 构建详细信息
+            reply_parts = [f"=== 您的账户详细信息 ==="]
+            reply_parts.append(f"绑定角色: {bound_player}")
+            reply_parts.append(f"绑定QQ: {user_id}")
+            
+            # XUID信息
+            xuid = player_data.get("xuid", "")
+            if xuid:
+                reply_parts.append(f"XUID: {xuid}")
+            
+            # 检查在线状态和权限
+            is_online = False
+            is_visitor = False
+            visitor_reason = ""
+            
+            for player in _plugin_instance.server.online_players:
+                if player.name == bound_player:
+                    is_online = True
+                    is_visitor = _plugin_instance.is_player_visitor(bound_player, player.xuid)
+                    visitor_reason = _plugin_instance.get_player_visitor_reason(bound_player, player.xuid)
+                    break
+            
+            # 当前状态
+            if is_online:
+                reply_parts.append("当前状态: 在线")
+            else:
+                reply_parts.append("当前状态: 离线")
+            
+            # 权限状态
+            if is_visitor:
+                reply_parts.append(f"权限状态: 访客权限 ({visitor_reason})")
+            else:
+                reply_parts.append("权限状态: 正常权限")
+            
+            # 群状态检查
+            if (_plugin_instance.get_config("force_bind_qq", True) and 
+                _plugin_instance.get_config("check_group_member", True)):
+                if (hasattr(_plugin_instance, '_group_members') and 
+                    _plugin_instance._group_members and 
+                    user_id in _plugin_instance._group_members):
+                    reply_parts.append("群状态: 在群内")
+                else:
+                    reply_parts.append("群状态: 已退群或未加群")
+            
+            # 封禁状态
+            is_banned = _plugin_instance.is_player_banned(bound_player)
+            if is_banned:
+                ban_time = format_timestamp(player_data.get("ban_time"))
+                ban_by = player_data.get("ban_by", "未知")
+                ban_reason = player_data.get("ban_reason", "无原因")
+                reply_parts.append(f"封禁状态: 已封禁")
+                reply_parts.append(f"封禁时间: {ban_time}")
+                reply_parts.append(f"封禁操作者: {ban_by}")
+                reply_parts.append(f"封禁原因: {ban_reason}")
+            else:
+                reply_parts.append("封禁状态: 正常")
+            
+            # 绑定历史
+            bind_history = _plugin_instance.get_player_binding_history(bound_player)
+            if bind_history:
+                reply_parts.append(f"绑定状态: {bind_history.get('status', '未知')}")
+                
+                if bind_history.get("bind_time"):
+                    reply_parts.append(f"首次绑定: {format_timestamp(bind_history['bind_time'])}")
+                
+                if bind_history.get("unbind_time"):
+                    reply_parts.append(f"解绑时间: {format_timestamp(bind_history['unbind_time'])}")
+                    reply_parts.append(f"解绑操作者: {bind_history.get('unbind_by', '未知')}")
+                
+                if bind_history.get("rebind_time"):
+                    reply_parts.append(f"重新绑定: {format_timestamp(bind_history['rebind_time'])}")
+                
+                if bind_history.get("original_qq") and bind_history.get("original_qq") != user_id:
+                    reply_parts.append(f"原QQ号: {bind_history['original_qq']}")
+                
+                if bind_history.get("previous_qq") and bind_history.get("previous_qq") != user_id:
+                    reply_parts.append(f"前一个QQ: {bind_history['previous_qq']}")
+            
+            # 游戏统计
+            playtime_info = _plugin_instance.get_player_playtime_info(bound_player)
+            if playtime_info:
+                total_time = format_time_duration(playtime_info["total_playtime"])
+                session_count = playtime_info["session_count"]
+                
+                reply_parts.append(f"总在线时间: {total_time}")
+                reply_parts.append(f"游戏次数: {session_count}次")
+                
+                if playtime_info["is_online"]:
+                    current_session = format_time_duration(playtime_info["current_session_time"])
+                    last_join = format_timestamp(playtime_info["last_join_time"])
+                    reply_parts.append(f"本次加入: {last_join}")
+                    reply_parts.append(f"本次在线: {current_session}")
+                else:
+                    last_join = format_timestamp(playtime_info["last_join_time"])
+                    last_quit = format_timestamp(playtime_info["last_quit_time"])
+                    reply_parts.append(f"最后加入: {last_join}")
+                    reply_parts.append(f"最后离开: {last_quit}")
+            
+            # 改名历史
+            if player_data.get("last_name_update"):
+                last_update = format_timestamp(player_data["last_name_update"])
+                reply_parts.append(f"最后改名: {last_update}")
+            
+            reply = "\n".join(reply_parts)
         else:
             reply = "您的QQ尚未绑定游戏角色\n请在游戏中完成绑定流程"
 
@@ -2188,8 +2907,8 @@ async def handle_message(ws, data: dict):
             
             # 判断输入是QQ号还是玩家名
             if search_input.isdigit():
-                # 输入的是QQ号，查找对应的玩家
-                target_player = _plugin_instance.get_qq_player(search_input)
+                # 输入的是QQ号，查找对应的玩家（包括历史绑定）
+                target_player = _plugin_instance.get_qq_player_history(search_input)
                 if not target_player:
                     reply = f"未找到绑定QQ号 {search_input} 的玩家"
                 else:
@@ -2317,8 +3036,17 @@ async def handle_message(ws, data: dict):
         reply = "用法：/who <玩家名|QQ号> - 查询玩家详细信息（绑定状态、游戏统计、权限状态等）"
 
     elif cmd == "verify" and len(args) == 1:
-        # 通过QQ群验证（输入验证码）
+        # 通过QQ群验证（输入验证码）- 多玩家优化版本
         verification_code = args[0]
+        
+        # 多玩家优化：检查验证码验证频率限制
+        current_time = time.time()
+        if user_id in _plugin_instance._binding_rate_limit:
+            last_attempt = _plugin_instance._binding_rate_limit[user_id]
+            if current_time - last_attempt < 10:  # 10秒冷却时间
+                reply = f"验证过于频繁，请等待 {int(10 - (current_time - last_attempt))} 秒后再试"
+                return reply
+        
         if user_id in _verification_codes:
             code_info = _verification_codes[user_id]
             if time.time() - code_info["timestamp"] > 300:  # 5分钟过期
@@ -2401,8 +3129,12 @@ async def handle_message(ws, data: dict):
                         _plugin_instance._loop
                     )
             else:
+                # 验证失败，记录冷却时间（多玩家优化）
+                _plugin_instance._binding_rate_limit[user_id] = time.time()
                 reply = "验证码错误，请检查后重试"
         else:
+            # 未找到验证码，记录冷却时间（多玩家优化）
+            _plugin_instance._binding_rate_limit[user_id] = time.time()
             reply = "未找到您的验证码，请先在游戏中申请绑定"
 
     elif cmd == "verify" and len(args) == 0:
