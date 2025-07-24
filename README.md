@@ -126,7 +126,7 @@ bedrock_server/plugins/qqsync_plugin/config.json
 玩家进入 → 弹出绑定表单 → 输入QQ号 → 等待验证码
 
 💬 QQ端接收：
-收到私聊消息："验证码: 123456"
+收到@消息："验证码: 123456"
 
 ✅ 验证完成：
 游戏内表单输入验证码 或 QQ群输入 "/verify 123456"

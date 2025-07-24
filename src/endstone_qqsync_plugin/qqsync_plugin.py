@@ -481,8 +481,23 @@ class qqsync(Plugin):
             self.logger.error(f"恢复玩家权限失败: {e}")
             return False
     
+    def is_valid_player(self, player):
+        """检查玩家对象是否有效且在线"""
+        try:
+            return (player and 
+                    hasattr(player, "send_message") and 
+                    hasattr(player, "name") and 
+                    hasattr(player, "xuid") and
+                    getattr(player, "is_online", True))
+        except Exception:
+            return False
+    
     def check_and_apply_permissions(self, player):
         """检查并应用权限策略"""
+        if not self.is_valid_player(player):
+            self.logger.warning("尝试对已失效的玩家对象应用权限，操作已跳过")
+            return
+            
         if not self.get_config("force_bind_qq", True):
             return  # 如果未启用强制绑定，不进行权限控制
         
@@ -779,7 +794,7 @@ class qqsync(Plugin):
                     # 延迟显示表单，确保消息先发送
                     self.server.scheduler.run_task(
                         self,
-                        lambda: self.show_qq_binding_form(player),
+                        lambda p=player: self.show_qq_binding_form(p) if self.is_valid_player(p) else None,
                         delay=5  # 0.25秒延迟
                     )
                 else:
@@ -1347,6 +1362,10 @@ class qqsync(Plugin):
     
     def show_qq_binding_form(self, player):
         """显示QQ绑定表单"""
+        if not self.is_valid_player(player):
+            self.logger.warning("尝试对已失效的玩家对象显示绑定表单，操作已跳过")
+            return
+            
         try:
             # 根据是否启用强制绑定显示不同的内容
             if self.get_config("force_bind_qq", True):
@@ -1382,11 +1401,11 @@ class qqsync(Plugin):
                 icon="textures/ui/icon_multiplayer"
             )
             
-            form.on_submit = lambda player, form_data: self._handle_qq_form_submit(player, form_data)
+            form.on_submit = lambda p, form_data: self._handle_qq_form_submit(p, form_data) if self.is_valid_player(p) else None
             close_message = f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}您可以稍后通过命令 /bindqq 进行QQ绑定{ColorFormat.RESET}"
             if not self.get_config("force_bind_qq", True):
                 close_message = f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}QQ绑定已取消，您可以正常游戏{ColorFormat.RESET}"
-            form.on_close = lambda player: player.send_message(close_message)
+            form.on_close = lambda p: p.send_message(close_message) if self.is_valid_player(p) else None
             
             player.send_form(form)
             
@@ -1396,6 +1415,10 @@ class qqsync(Plugin):
     
     def _handle_qq_form_submit(self, player, form_data):
         """处理QQ绑定表单提交"""
+        if not self.is_valid_player(player):
+            self.logger.warning("尝试处理已失效玩家的表单提交，操作已跳过")
+            return
+            
         global _pending_verifications, _verification_codes
         
         try:
@@ -1422,7 +1445,7 @@ class qqsync(Plugin):
                 if self.get_config("force_bind_qq", True):
                     self.server.scheduler.run_task(
                         self,
-                        lambda: self.show_qq_binding_form(player),
+                        lambda p=player: self.show_qq_binding_form(p) if self.is_valid_player(p) else None,
                         delay=20
                     )
                 return
@@ -1434,7 +1457,7 @@ class qqsync(Plugin):
                 if self.get_config("force_bind_qq", True):
                     self.server.scheduler.run_task(
                         self,
-                        lambda: self.show_qq_binding_form(player),
+                        lambda p=player: self.show_qq_binding_form(p) if self.is_valid_player(p) else None,
                         delay=20
                     )
                 return
@@ -1542,6 +1565,10 @@ class qqsync(Plugin):
     
     def _show_qq_confirmation_form(self, player, qq_number, nickname):
         """显示QQ信息确认表单"""
+        if not self.is_valid_player(player):
+            self.logger.warning("尝试对已失效的玩家对象显示确认表单，操作已跳过")
+            return
+            
         try:
             # 格式化显示内容
             content = f"""请确认以下QQ账号信息是否正确：
@@ -1557,14 +1584,16 @@ QQ号: {qq_number}
             )
             
             # MessageForm 的 on_submit 回调函数接收按钮索引：0=button1, 1=button2
-            def handle_submit(player, button_index):
+            def handle_submit(p, button_index):
+                if not self.is_valid_player(p):
+                    return
                 if button_index == 0:  # 确认绑定
-                    self._handle_qq_confirmation(player, True, qq_number, nickname)
+                    self._handle_qq_confirmation(p, True, qq_number, nickname)
                 else:  # 重新输入
-                    self._handle_qq_confirmation(player, False, qq_number, nickname)
+                    self._handle_qq_confirmation(p, False, qq_number, nickname)
             
             form.on_submit = handle_submit
-            form.on_close = lambda player: self._handle_qq_confirmation(player, False, qq_number, nickname)
+            form.on_close = lambda p: self._handle_qq_confirmation(p, False, qq_number, nickname) if self.is_valid_player(p) else None
             
             player.send_form(form)
             
@@ -1574,6 +1603,10 @@ QQ号: {qq_number}
     
     def _handle_qq_confirmation(self, player, confirmed, qq_number=None, nickname=None):
         """处理QQ信息确认结果"""
+        if not self.is_valid_player(player):
+            self.logger.warning("尝试处理已失效玩家的确认结果，操作已跳过")
+            return
+            
         global _pending_verifications, _verification_codes, _player_bind_attempts
         
         try:
@@ -1701,6 +1734,10 @@ QQ号: {qq_number}
     
     def show_verification_form(self, player):
         """显示验证码输入表单"""
+        if not self.is_valid_player(player):
+            self.logger.warning("尝试对已失效的玩家对象显示验证表单，操作已跳过")
+            return
+            
         try:
             form = ModalForm(
                 title="QQ验证码确认",
@@ -1720,8 +1757,8 @@ QQ号: {qq_number}
                 icon="textures/ui/icon_book_writable"
             )
             
-            form.on_submit = lambda player, form_data: self._handle_verification_submit(player, form_data)
-            form.on_close = lambda player: self._handle_verification_close(player)
+            form.on_submit = lambda p, form_data: self._handle_verification_submit(p, form_data) if self.is_valid_player(p) else None
+            form.on_close = lambda p: self._handle_verification_close(p) if self.is_valid_player(p) else None
             
             player.send_form(form)
             
@@ -1731,6 +1768,10 @@ QQ号: {qq_number}
     
     def _handle_verification_close(self, player):
         """处理验证表单关闭"""
+        if not self.is_valid_player(player):
+            self.logger.warning("尝试处理已失效玩家的验证表单关闭，操作已跳过")
+            return
+            
         global _pending_verifications, _verification_codes, _player_bind_attempts
         
         # 记录绑定尝试时间用于60秒冷却（即使用户取消了验证）
@@ -1748,6 +1789,10 @@ QQ号: {qq_number}
     
     def _handle_verification_submit(self, player, form_data):
         """处理验证码提交"""
+        if not self.is_valid_player(player):
+            self.logger.warning("尝试处理已失效玩家的验证码提交，操作已跳过")
+            return
+            
         global _pending_verifications, _verification_codes
         
         try:
@@ -1802,7 +1847,7 @@ QQ号: {qq_number}
                 # 重新显示验证表单
                 self.server.scheduler.run_task(
                     self,
-                    lambda: self.show_verification_form(player),
+                    lambda p=player: self.show_verification_form(p) if self.is_valid_player(p) else None,
                     delay=10
                 )
                 return
@@ -1912,7 +1957,7 @@ QQ号: {qq_number}
                     # 重新显示验证表单
                     self.server.scheduler.run_task(
                         self,
-                        lambda: self.show_verification_form(player),
+                        lambda p=player: self.show_verification_form(p) if self.is_valid_player(p) else None,
                         delay=10
                     )
                 else:
