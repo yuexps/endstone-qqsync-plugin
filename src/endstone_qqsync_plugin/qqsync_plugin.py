@@ -175,7 +175,7 @@ class qqsync(Plugin):
             self,
             self.verification_manager.process_verification_send_queue,
             delay=60,     # 3秒后首次执行 (3秒 × 20tick/秒)
-            period=400    # 每20秒检查一次队列 (20秒 × 20tick/秒)
+            period=100    # 每5秒检查一次队列 (5秒 × 20tick/秒)
         )
         
         # 验证码清理任务
