@@ -2,6 +2,8 @@
 
 一个简易的 Minecraft 服务器与 QQ 群聊双向互通插件，基于 Endstone 插件框架开发。
 
+这是一个在 AI 的帮助下编写的 Endstone 插件，用于实现简单的群服互通！
+
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.12+-green.svg)
 ![Endstone](https://img.shields.io/badge/endstone-0.6-orange.svg)
@@ -17,14 +19,14 @@
 - 👮 **访客权限管理**：未绑定QQ的玩家受访客权限限制
 - 🚫 **玩家封禁系统**：支持封禁玩家并禁止QQ绑定
 - 👥 **群成员监控**：自动检测玩家退群并调整权限
-- 🎯 **访客限制保护**：多层次防护，阻止访客恶意行为
+- 🎯 **访客限制保护**：限制访客权限，阻止访客恶意行为
 
 ## 🚀 快速开始
 
 ### 1. 安装
 将插件放到 Endstone 服务器插件目录：
 ```
-bedrock_server/plugins/endstone_qqsync_plugin-0.0.4-py2.py3-none-any.whl
+bedrock_server/plugins/endstone_qqsync_plugin-0.0.5-py2.py3-none-any.whl
 ```
 
 ### 2. 配置
@@ -43,7 +45,10 @@ bedrock_server/plugins/qqsync_plugin/config.json
   "enable_game_to_qq": true,             // 游戏消息转发到QQ
   "force_bind_qq": true,                 // 强制QQ绑定（启用身份验证系统）
   "sync_group_card": true,               // 自动同步群昵称为玩家名
-  "check_group_member": true             // 启用退群检测功能
+  "check_group_member": true,             // 启用退群检测功能
+  //聊天刷屏检测配置
+  "chat_count_limit": 20, // 1分钟内最多发送消息数（-1则不限制）
+  "chat_ban_time": 300    // 刷屏后禁言时间（秒）
 }
 ```
 
@@ -86,6 +91,7 @@ bedrock_server/plugins/qqsync_plugin/config.json
 
 #### 🎮 游戏 → QQ群
 ```
+(过滤敏感内容)
 🟢 yuexps 加入了服务器
 💬 yuexps: 大家好！
 💀 yuexps 被僵尸杀死了
