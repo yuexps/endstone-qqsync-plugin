@@ -175,7 +175,7 @@ class qqsync(Plugin):
             self,
             self.verification_manager.process_verification_send_queue,
             delay=60,     # 3秒后首次执行 (3秒 × 20tick/秒)
-            period=100    # 每5秒检查一次队列 (5秒 × 20tick/秒)
+            period=60    # 每3秒检查一次队列 (3秒 × 20tick/秒)
         )
         
         # 验证码清理任务
@@ -310,10 +310,10 @@ class qqsync(Plugin):
                     future.result(timeout=3)
                     self.logger.info("服务器停止消息已发送")
                 except Exception as msg_error:
-                    self.logger.info(f"发送关闭消息失败（这是正常的）: {msg_error}")
+                    self.logger.warning(f"发送关闭消息失败（这是正常的）: {msg_error}")
             else:
-                self.logger.info("NapCat WS 连接不可用，跳过关闭消息发送")
-            
+                self.logger.warning("NapCat WS 连接不可用，跳过关闭消息发送")
+
             # 保存数据
             if hasattr(self, 'data_manager'):
                 self.data_manager.save_data()
@@ -333,8 +333,8 @@ class qqsync(Plugin):
                     else:
                         self.logger.info("事件循环已关闭")
                 except Exception as loop_error:
-                    self.logger.info(f"停止事件循环时出错: {loop_error}")
-                
+                    self.logger.warning(f"停止事件循环时出错: {loop_error}")
+
                 # 等待线程结束
                 if hasattr(self, '_thread') and self._thread and self._thread.is_alive():
                     try:
@@ -342,8 +342,8 @@ class qqsync(Plugin):
                         if self._thread.is_alive():
                             self.logger.warning("事件循环线程未能在5秒内正常结束")
                     except Exception as thread_error:
-                        self.logger.info(f"等待线程结束时出错: {thread_error}")
-            
+                        self.logger.warning(f"等待线程结束时出错: {thread_error}")
+
             self.logger.info(f"{ColorFormat.YELLOW}qqsync_plugin 已禁用{ColorFormat.RESET}")
             
         except Exception as e:

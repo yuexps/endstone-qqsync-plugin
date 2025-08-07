@@ -562,7 +562,7 @@ class VerificationManager:
             }
             
             await self.plugin._current_ws.send(json.dumps(payload))
-            self.logger.info(f"✅ 已发送设置群昵称请求: QQ {qq_number} -> {player_name}")
+            self.logger.info(f"📤 已发送设置群昵称请求: QQ {qq_number} -> {player_name}")
             
         except Exception as e:
             self.logger.error(f"❌ 设置群昵称失败: {e}")

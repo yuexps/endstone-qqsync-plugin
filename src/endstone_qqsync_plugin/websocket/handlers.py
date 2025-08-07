@@ -187,8 +187,8 @@ async def set_group_card(ws, group_id: int, user_id: int, card: str):
             _plugin_instance.logger.info(f"🏷️ 尝试设置群昵称: QQ={user_id}, 群={group_id}, 昵称='{card}'")
         await ws.send(json.dumps(payload))
     except Exception as e:
-        if _plugin_instance:
-            _plugin_instance.logger.error(f"设置群昵称失败: {e}")
+        # 让异常向上传播，由调用者(verification_manager)处理日志
+        raise e
 
 
 async def get_group_member_list(ws, group_id: int):
@@ -359,11 +359,7 @@ async def _handle_verification_code_with_feedback(ws, user_id: int, code: str, d
             # 绑定成功 - 数据绑定由 data_manager 处理
             _plugin_instance.data_manager.bind_player_qq(player_name, target_player.xuid, qq_str)
             
-            # 注意：验证数据清理和验证码撤回已在 verification_manager.verify_code() 中统一处理
-            
-            # 发送绑定成功的@播报消息（/verify命令特有的群组反馈）
-            success_message = f"\n🎉 已完成QQ绑定验证\n玩家ID：{player_name}\nQQ号：{qq_str}"
-            await send_group_msg_with_at(ws, group_id=group_id, user_id=user_id, text=success_message)
+            # 注意：验证数据清理、验证码撤回和绑定成功播报已在 verification_manager.verify_code() 中统一处理
             
             # 通知玩家 - 使用调度器确保在主线程执行
             def notify_player():
@@ -994,31 +990,11 @@ async def handle_api_response(data: dict):
             if _plugin_instance:
                 error_msg = data.get("message", "未知错误")
                 if action == "set_group_card":
-                    _plugin_instance.logger.warning(f"❌ 设置群昵称失败: retcode={retcode}, msg={error_msg}")
-                    # 通知verification_manager处理失败响应
+                    # 通知verification_manager处理失败响应，由它负责日志输出
                     if hasattr(_plugin_instance, 'verification_manager'):
                         _plugin_instance.verification_manager.handle_api_response(echo, "failed", {"retcode": retcode, "message": error_msg})
                 else:
                     _plugin_instance.logger.warning(f"❌ API请求失败: retcode={retcode}, msg={error_msg}, echo={echo}")
-        
-        elif action == "set_group_card" and status == "ok" and retcode == 0:
-            # 设置群昵称成功
-            if _plugin_instance:
-                # 通知verification_manager处理成功响应
-                if hasattr(_plugin_instance, 'verification_manager'):
-                    _plugin_instance.verification_manager.handle_api_response(echo, "ok", response_data)
-                
-                # 从echo中提取QQ号和玩家名
-                if ":" in echo:
-                    parts = echo.split(":")
-                    if len(parts) >= 3:
-                        qq_number = parts[1]
-                        player_name = parts[2]
-                        _plugin_instance.logger.info(f"✅ 群昵称设置成功: {player_name} (QQ: {qq_number})")
-                    else:
-                        _plugin_instance.logger.info(f"✅ 群昵称设置成功")
-                else:
-                    _plugin_instance.logger.info(f"✅ 群昵称设置成功")
         
         elif action == "get_group_member_list" and status == "ok" and retcode == 0 and response_data:
             # 更新群成员列表
