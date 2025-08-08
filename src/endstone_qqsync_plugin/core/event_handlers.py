@@ -19,7 +19,7 @@ from endstone.event import (
     BlockPlaceEvent,
     ActorDamageEvent,
 )
-
+from endstone import ColorFormat
 
 class EventHandlers:
     """事件处理器"""
@@ -271,7 +271,6 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送提示消息
-                from endstone import ColorFormat
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{cooldown_msg}{ColorFormat.RESET}")
                 return
             
@@ -282,7 +281,6 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送刷屏警告消息
-                from endstone import ColorFormat
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{spam_msg}{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请文明聊天，避免刷屏行为{ColorFormat.RESET}")
                 return
@@ -298,7 +296,6 @@ class EventHandlers:
                     event.is_cancelled = True
                     
                     # 给玩家发送提示消息
-                    from endstone import ColorFormat
                     player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能聊天！{ColorFormat.RESET}")
                     player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                     return
@@ -381,7 +378,6 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送提示消息
-                from endstone import ColorFormat
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能破坏方块！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                 return
@@ -404,7 +400,6 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送提示消息
-                from endstone import ColorFormat
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能放置方块！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                 return
@@ -427,7 +422,6 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送提示消息
-                from endstone import ColorFormat
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能进行该操作！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                 return
@@ -450,7 +444,6 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送提示消息
-                from endstone import ColorFormat
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能与实体交互！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                 return
@@ -484,7 +477,6 @@ class EventHandlers:
                         event.is_cancelled = True
                         
                         # 发送提示消息
-                        from endstone import ColorFormat
                         damager.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能攻击实体！{ColorFormat.RESET}")
                         damager.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                         return
@@ -507,7 +499,6 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送提示消息
-                from endstone import ColorFormat
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能拾取物品！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                 return
@@ -530,7 +521,6 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送提示消息
-                from endstone import ColorFormat
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能丢弃物品！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                 return
@@ -541,7 +531,6 @@ class EventHandlers:
     def _show_auto_binding_form(self, player):
         """为未绑定的玩家自动显示绑定表单"""
         try:
-            from endstone import ColorFormat
             
             # 再次检查玩家是否有效且未绑定
             if not self.plugin.is_valid_player(player):
