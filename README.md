@@ -232,4 +232,5 @@ bedrock_server/plugins/qqsync_plugin/config.json
 ---
 
 这是一个在 AI 的帮助下编写的 Endstone 插件，用于实现简单的群服互通！
+
 **⭐ 觉得有用请给个 Star！**
