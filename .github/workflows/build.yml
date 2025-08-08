@@ -6,46 +6,28 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:
-  build_wheels:
-    name: Build wheel on ${{ matrix.os }} / Python ${{ matrix.python-version }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.12"]
-
+  build_wheel:
+    name: Build wheel
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 安装 Python
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
-      # 升级基础工具
       - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip build twine
+        run: python -m pip install --upgrade pip build
 
-      # 构建 wheel 与源码包
       - name: Build wheel
-        run: python -m build
+        run: python -m build --wheel --outdir dist
 
-      # 校验 wheel 与 tar.gz 是否 OK
-      - name: Check dists
-        run: twine check dist/*
-
-      # 上传构件
-      - name: Upload artifacts
+      - name: Upload wheel(s)
         uses: actions/upload-artifact@v4
         with:
           name: qqsync_build
-          path: dist/*
+          path: dist/*.whl
           retention-days: 90
