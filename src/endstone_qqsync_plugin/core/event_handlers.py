@@ -346,19 +346,17 @@ class EventHandlers:
                 
                 import asyncio
                 from ..websocket.handlers import send_group_msg
-                from ..utils.message_utils import filter_sensitive_content
                 
-                # 过滤死亡消息中的敏感内容
-                filtered_death_message, has_sensitive = filter_sensitive_content(death_message)
+                # 将 Translatable 对象转换为字符串
+                if hasattr(death_message, '__str__'):
+                    death_message_str = str(death_message)
+                else:
+                    death_message_str = death_message
                 
                 # 构建死亡消息
-                death_msg = f"💀 {filtered_death_message}"
+                death_msg = f"💀 {death_message_str}"
                 
-                # 如果包含敏感内容，记录日志
-                if has_sensitive:
-                    self.logger.warning(f"玩家 {player_name} 的死亡消息包含敏感内容，已过滤: {death_message}")
-                
-                # 发送过滤后的消息到QQ群
+                # 发送消息到QQ群
                 asyncio.run_coroutine_threadsafe(
                     send_group_msg(self.plugin._current_ws, group_id=self.plugin.config_manager.get_config("target_group"), text=death_msg),
                     self.plugin._loop
@@ -430,7 +428,7 @@ class EventHandlers:
                 
                 # 发送提示消息
                 from endstone import ColorFormat
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能使用物品！{ColorFormat.RESET}")
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能进行该操作！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                 return
                 
@@ -469,13 +467,20 @@ class EventHandlers:
             
             # 检查伤害来源是否是玩家
             damage_source = event.damage_source
+            
+            # 只有当伤害来源是玩家时，才进行权限检查
+            # 生物攻击玩家或其他实体时不受此限制
             if hasattr(damage_source, 'actor') and damage_source.actor:
                 damager = damage_source.actor
-                # 检查是否是玩家造成的伤害
-                if hasattr(damager, 'has_permission'):  # 确认是玩家对象
+                
+                # 检查是否是玩家：只检查玩家特有的属性
+                # 玩家会有 name、xuid 和 has_permission 方法
+                if (hasattr(damager, 'name') and hasattr(damager, 'xuid') and 
+                    hasattr(damager, 'has_permission') and callable(getattr(damager, 'has_permission', None))):
+                    
                     # 检查攻击权限
                     if not damager.has_permission("qqsync.combat"):
-                        # 取消事件
+                        # 取消事件，阻止玩家攻击
                         event.is_cancelled = True
                         
                         # 发送提示消息
