@@ -8,7 +8,7 @@ on:
     branches: [main]
   release:
     types: [published]
-  workflow_dispatch:          # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build_wheels:
@@ -46,29 +46,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.python-version }}
+          name: qqsync_build
           path: dist/*
           retention-days: 90
-
-  # 仅在 Release 发布时执行上传
-  upload_pypi:
-    name: Upload to PyPI
-    runs-on: ubuntu-latest
-    needs: build_wheels
-    if: github.event_name == 'release' && github.event.action == 'published'
-    environment:
-      name: pypi
-      url: https://pypi.org/p/<YOUR_PACKAGE_NAME>
-    permissions:
-      id-token: write  # 使用 OIDC 方式上传，无需额外 token
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: dist-*
-          merge-multiple: true
-          path: dist
-
-      # 使用官方 PyPI 上传动作（OIDC，无需 PYPI_API_TOKEN）
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
