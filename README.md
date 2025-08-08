@@ -2,8 +2,6 @@
 
 一个简易的 Minecraft 服务器与 QQ 群聊双向互通插件，基于 Endstone 插件框架开发。
 
-这是一个在 AI 的帮助下编写的 Endstone 插件，用于实现简单的群服互通！
-
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.12+-green.svg)
 ![Endstone](https://img.shields.io/badge/endstone-0.6-orange.svg)
@@ -233,4 +231,5 @@ bedrock_server/plugins/qqsync_plugin/config.json
 
 ---
 
+这是一个在 AI 的帮助下编写的 Endstone 插件，用于实现简单的群服互通！
 **⭐ 觉得有用请给个 Star！**
