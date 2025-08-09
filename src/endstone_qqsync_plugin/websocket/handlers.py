@@ -219,18 +219,24 @@ async def handle_message(ws, data: dict):
         group_id = data.get("group_id")
         user_id = data.get("user_id")
         raw_message = data.get("raw_message", "")
-        message = data.get("message", "")
         sender = data.get("sender", {})
         nickname = sender.get("nickname", "未知")
         card = sender.get("card", "")
-        display_name = card if card else nickname
         
         if not _plugin_instance:
             return
-            
+        
+        # 先检查是否是目标群组，避免不必要的数据库查询
         target_group = _plugin_instance.config_manager.get_config("target_group")
         if group_id != target_group:
             return
+        
+        # 检查用户是否已绑定QQ，如果已绑定则使用玩家游戏ID
+        bound_player = _plugin_instance.data_manager.get_qq_player(str(user_id))
+        if bound_player:
+            display_name = bound_player  # 使用玩家游戏ID作为显示名
+        else:
+            display_name = card if card else nickname  # 使用QQ群昵称或QQ昵称
         
         # 处理验证码
         if raw_message.isdigit() and len(raw_message) == 6:
@@ -913,7 +919,7 @@ async def _forward_message_to_game(message_data: dict, display_name: str):
             return
         
         # 转发到游戏 - 使用调度器确保在主线程执行
-        game_message = f"{ColorFormat.BLUE}[QQ群] {ColorFormat.AQUA}{clean_message}{ColorFormat.RESET}"
+        game_message = f"{ColorFormat.GREEN}[QQ群] {ColorFormat.AQUA}{clean_message}{ColorFormat.RESET}"
         
         def send_to_players():
             """在主线程中发送消息给所有玩家"""

@@ -189,7 +189,7 @@ class WebSocketClient:
                 request_type = data.get("request_type")
                 self.logger.info(f"收到请求事件: {request_type}")
             else:
-                self.logger.info(f"未识别的消息类型: {data}")
+                self.logger.debug(f"未识别的消息类型: {data}")
                 
         except Exception as e:
             self.logger.error(f"处理消息失败: {e}")
