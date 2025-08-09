@@ -334,8 +334,7 @@ class EventHandlers:
         try:
             player = event.player
             player_name = player.name
-            death_message = event.death_message or f"{player_name} 死了"
-            
+
             # 转发到QQ群（如果启用且玩家已绑定）
             if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
                 self.plugin.config_manager.get_config("enable_game_to_qq", True) and
@@ -343,15 +342,15 @@ class EventHandlers:
                 
                 import asyncio
                 from ..websocket.handlers import send_group_msg
-                
-                # 将 Translatable 对象转换为字符串
-                if hasattr(death_message, '__str__'):
-                    death_message_str = str(death_message)
-                else:
-                    death_message_str = death_message
-                
+
                 # 构建死亡消息
-                death_msg = f"💀 {death_message_str}"
+                try:
+                    death_msg = f"💀 {str(event.death_message)}"
+                    # 如果仍然是对象地址，使用默认消息
+                    if 'object at 0x' in death_msg:
+                        death_msg = f"💀 {player_name} 死了"
+                except:
+                    death_msg = f"💀 {player_name} 死了"
                 
                 # 发送消息到QQ群
                 asyncio.run_coroutine_threadsafe(
