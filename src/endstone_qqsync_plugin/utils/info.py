@@ -35,13 +35,7 @@ def get_cpu_name():
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
             pass
         
-        # 最后回退到 psutil，再次回退到 platform.processor()
-        try:
-            cpu_info = psutil.cpu_freq()
-            if cpu_info:
-                return f"{platform.processor()} @ {cpu_info.max:.2f}MHz"
-        except Exception:
-            pass
+        # 最后回退到 platform.processor()
         return platform.processor()
         
     elif sys.platform.startswith("linux"):

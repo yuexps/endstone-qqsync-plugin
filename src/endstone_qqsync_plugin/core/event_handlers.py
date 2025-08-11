@@ -175,7 +175,7 @@ class EventHandlers:
                     delay=60  # 3秒延迟，确保玩家完全加载
                 )
 
-            # 发送QQ群通知（如果启用且玩家已绑定）
+            # 发送QQ群通知（根据 force_bind_qq 配置决定是否必须绑定）
             if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
                 self.plugin.config_manager.get_config("enable_game_to_qq", True) and
                 (self.plugin.data_manager.is_player_bound(player_name, player_xuid) or not self.plugin.config_manager.get_config("force_bind_qq", True))):
@@ -221,7 +221,7 @@ class EventHandlers:
             # 清理聊天相关数据
             self.cleanup_player_chat_data(player_name)
             
-            # 发送QQ群通知（如果启用且玩家已绑定）
+            # 发送QQ群通知（根据 force_bind_qq 配置决定是否必须绑定）
             if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
                 self.plugin.config_manager.get_config("enable_game_to_qq", True) and
                 (self.plugin.data_manager.is_player_bound(player_name, player_xuid) or not self.plugin.config_manager.get_config("force_bind_qq", True))):
