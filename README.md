@@ -6,6 +6,8 @@
 ![Python](https://img.shields.io/badge/python-3.12+-green.svg)
 ![Endstone](https://img.shields.io/badge/endstone-0.6-orange.svg)
 
+最新构建（未测试）：[Actions]: [https://github.com](https://github.com/yuexps/endstone-qqsync-plugin/actions) "Actions"
+
 ## ✨ 核心功能
 
 - 🔄 **双向消息同步**：QQ群聊 ↔ 游戏内聊天
