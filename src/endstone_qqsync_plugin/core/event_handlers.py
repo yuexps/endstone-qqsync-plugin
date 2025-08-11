@@ -174,11 +174,11 @@ class EventHandlers:
                     lambda: self._show_auto_binding_form(player) if self.plugin.is_valid_player(player) else None,
                     delay=60  # 3秒延迟，确保玩家完全加载
                 )
-            
+
             # 发送QQ群通知（如果启用且玩家已绑定）
             if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
                 self.plugin.config_manager.get_config("enable_game_to_qq", True) and
-                self.plugin.data_manager.is_player_bound(player_name, player_xuid)):
+                (self.plugin.data_manager.is_player_bound(player_name, player_xuid) or not self.plugin.config_manager.get_config("force_bind_qq", True))):
                 
                 import asyncio
                 from ..websocket.handlers import send_group_msg
@@ -224,26 +224,26 @@ class EventHandlers:
             # 发送QQ群通知（如果启用且玩家已绑定）
             if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
                 self.plugin.config_manager.get_config("enable_game_to_qq", True) and
-                self.plugin.data_manager.is_player_bound(player_name, player_xuid)):
-                
+                (self.plugin.data_manager.is_player_bound(player_name, player_xuid) or not self.plugin.config_manager.get_config("force_bind_qq", True))):
+            
                 import asyncio
                 from ..websocket.handlers import send_group_msg
-                
+            
                 # 获取玩家统计信息
                 playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, [])  # 玩家已离线，传入空列表
                 total_playtime = playtime_info.get("total_playtime", 0)
-                
+            
                 # 格式化游戏时长
                 hours = total_playtime // 3600
                 minutes = (total_playtime % 3600) // 60
-                
+            
                 if hours > 0:
                     playtime_str = f"{hours}小时{minutes}分钟"
                 else:
                     playtime_str = f"{minutes}分钟"
-                
+            
                 quit_msg = f"🔴 玩家 {player_name} 离开游戏 (总游戏时长: {playtime_str})"
-                
+            
                 asyncio.run_coroutine_threadsafe(
                     send_group_msg(self.plugin._current_ws, group_id=self.plugin.config_manager.get_config("target_group"), text=quit_msg),
                     self.plugin._loop
@@ -300,10 +300,10 @@ class EventHandlers:
                     player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                     return
             
-            # 转发到QQ群（如果启用且玩家已绑定）
+            # 转发到QQ群（根据 force_bind_qq 配置决定是否必须绑定）
             if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
                 self.plugin.config_manager.get_config("enable_game_to_qq", True) and
-                self.plugin.data_manager.is_player_bound(player_name, player.xuid)):
+                (self.plugin.data_manager.is_player_bound(player_name, player.xuid) or not self.plugin.config_manager.get_config("force_bind_qq", True))):
                 
                 import asyncio
                 from ..websocket.handlers import send_group_msg
