@@ -650,21 +650,12 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 # 执行服务器命令
                 command_to_execute = " ".join(args)
                 
-                # 使用调度器在主线程执行
-                def execute_and_reply():
-                    """在主线程执行命令并发送回复"""
-                    try:
-                        result = _plugin_instance.server.dispatch_command(_plugin_instance.server.command_sender, command_to_execute)
-                        reply_text = f"✅ 命令已执行: /{command_to_execute}"
-                        
-                        # 创建异步任务发送回复
-                        asyncio.create_task(send_group_msg(ws, group_id, reply_text))
-                    except Exception as e:
-                        reply_text = f"❌ 命令执行失败: {str(e)}"
-                        asyncio.create_task(send_group_msg(ws, group_id, reply_text))
-                
-                _plugin_instance.server.scheduler.run_task(_plugin_instance, execute_and_reply, delay=1)
-                return
+                try:
+                    result = _plugin_instance.server.dispatch_command(_plugin_instance.server.command_sender, command_to_execute)
+                    reply = f"✅ 命令已执行: /{command_to_execute} \n执行结果: {'成功' if result else '失败, 请检查命令语法或权限'}"
+
+                except Exception as e:
+                    reply = f"❌ 命令执行失败: {str(e)}"
             
             elif cmd == "who" and len(args) == 1:
                 # 查询玩家信息
@@ -930,17 +921,6 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
         if _plugin_instance:
             _plugin_instance.logger.error(f"处理群内命令失败: {e}")
             await send_group_msg(ws, group_id, f"❌ 命令处理失败: {str(e)}")
-
-
-async def _handle_admin_command(ws, user_id: int, command: str, display_name: str, group_id: int):
-    """处理管理员命令"""
-    try:
-        # 这里可以添加管理员命令处理逻辑
-        # 例如：查询服务器状态、执行管理命令等
-        pass
-    except Exception as e:
-        if _plugin_instance:
-            _plugin_instance.logger.error(f"处理管理员命令失败: {e}")
 
 
 async def _forward_message_to_game(message_data: dict, display_name: str):
