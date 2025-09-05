@@ -8,7 +8,7 @@
 
 最新构建（未测试）：[Actions](https://github.com/yuexps/endstone-qqsync-plugin/actions "Actions")
 
-## 💡 前置组件：
+## 💡 前置组件
 
 - **NapCat** （或其他支持OneBot V11 正向WS 协议的QQ框架）
 - NapCat：https://napneko.github.io/guide/boot/Shell
