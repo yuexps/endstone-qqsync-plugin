@@ -898,7 +898,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
             elif cmd == "reload":
                 # 重新加载配置
                 try:
-                    _plugin_instance.config_manager.load_config()
+                    _plugin_instance.config_manager.reload_config()
                     reply = "✅ 配置文件已重新加载"
                 except Exception as e:
                     reply = f"❌ 重新加载配置失败: {str(e)}"
