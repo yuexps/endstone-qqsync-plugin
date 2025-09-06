@@ -39,7 +39,7 @@ pip install endstone-qqsync-plugin==0.0.7
 #### 手动安装
 将插件放到 Endstone 服务器插件目录：
 ```
-bedrock_server/plugins/endstone_qqsync_plugin-0.0.5-py2.py3-none-any.whl
+bedrock_server/plugins/endstone_qqsync_plugin-0.0.7-py2.py3-none-any.whl
 ```
 
 ### 2. 配置
