@@ -9,6 +9,9 @@ import struct
 import time
 from typing import Tuple
 
+# 中国时区 (UTC+8)
+CHINA_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
 
 class TimeUtils:
     """时间工具类"""
@@ -59,7 +62,7 @@ class TimeUtils:
                 return True
             
             # 比较本地时间和网络时间
-            local_time = datetime.datetime.now()
+            local_time = datetime.datetime.now(CHINA_TZ)
             time_diff = abs((local_time - network_time).total_seconds())
             
             # 如果时间差小于阈值，认为本地时间准确
@@ -96,7 +99,7 @@ class TimeUtils:
             is_accurate = cls.check_local_time_accuracy()
             cls._time_check_performed = True
             
-            local_time = datetime.datetime.now()
+            local_time = datetime.datetime.now(CHINA_TZ)
             
             if is_accurate:
                 print(f"✅ 本地时间准确，将优先使用本地时间")
@@ -153,11 +156,11 @@ class TimeUtils:
                     continue
             
             # 所有NTP服务器都失败，返回本地时间
-            return datetime.datetime.now(), False
+            return datetime.datetime.now(CHINA_TZ), False
             
         except Exception:
             # 完全失败，返回本地时间
-            return datetime.datetime.now(), False
+            return datetime.datetime.now(CHINA_TZ), False
     
     @classmethod
     def _get_ntp_time(cls, server: str, timeout: int = 3) -> datetime.datetime:
@@ -190,7 +193,7 @@ class TimeUtils:
             timestamp = struct.unpack('!12I', data)[10]
             timestamp -= 2208988800  # NTP纪元转Unix纪元
             
-            network_time = datetime.datetime.fromtimestamp(timestamp)
+            network_time = datetime.datetime.fromtimestamp(timestamp, CHINA_TZ)
             return network_time
             
         finally:
@@ -289,7 +292,7 @@ class TimeUtils:
         
         # 如果本地时间准确，优先使用本地时间
         if cls._local_time_accurate:
-            return datetime.datetime.now(), False
+            return datetime.datetime.now(CHINA_TZ), False
         else:
             # 本地时间不准确，使用网络时间
             return cls.get_network_time()
