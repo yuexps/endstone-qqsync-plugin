@@ -31,12 +31,12 @@
 
 ### 1. 安装
 
-#### 自动安装（使用 Pypi）
+#### 自动安装&更新（使用 Pypi）
 ```
-pip install endstone-qqsync-plugin==0.0.7
+pip install --upgrade endstone-qqsync-plugin
 ```
 
-#### 手动安装
+#### 手动安装（自己从[Releases](https://github.com/yuexps/endstone-qqsync-plugin/releases "Releases")或[Actions](https://github.com/yuexps/endstone-qqsync-plugin/actions "Actions")下载）
 将插件放到 Endstone 服务器插件目录：
 ```
 bedrock_server/plugins/endstone_qqsync_plugin-0.0.7-py2.py3-none-any.whl
