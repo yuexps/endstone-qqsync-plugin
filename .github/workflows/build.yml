@@ -1,5 +1,5 @@
 # .github/workflows/build_wheel.yml
-name: Build Python Wheels
+name: Build Wheels & Upload PyPi
 
 on:
   push:
