@@ -63,6 +63,11 @@ class TimeUtils:
             
             # 比较本地时间和网络时间
             local_time = datetime.datetime.now(CHINA_TZ)
+            
+            # 处理时区不匹配问题
+            if network_time.tzinfo is None:
+                network_time = network_time.replace(tzinfo=CHINA_TZ)
+            
             time_diff = abs((local_time - network_time).total_seconds())
             
             # 如果时间差小于阈值，认为本地时间准确
@@ -237,6 +242,13 @@ class TimeUtils:
             dict: 包含运行时间信息的字典
         """
         current_time, is_network_time = cls.get_current_time()
+        
+        # 处理时区不匹配问题
+        if start_time.tzinfo is None and current_time.tzinfo is not None:
+            start_time = start_time.replace(tzinfo=CHINA_TZ)
+        elif start_time.tzinfo is not None and current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=CHINA_TZ)
+        
         uptime = current_time - start_time
         
         # 格式化运行时间
@@ -331,6 +343,12 @@ class TimeUtils:
         """
         if end_time is None:
             end_time, _ = cls.get_current_time()
+        
+        # 处理时区不匹配问题
+        if start_time.tzinfo is None and end_time.tzinfo is not None:
+            start_time = start_time.replace(tzinfo=CHINA_TZ)
+        elif start_time.tzinfo is not None and end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=CHINA_TZ)
         
         time_diff = end_time - start_time
         days = time_diff.days
