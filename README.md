@@ -61,7 +61,8 @@ bedrock_server/plugins/qqsync_plugin/config.json
   "check_group_member": true,             // 启用退群检测功能
   //聊天刷屏检测配置
   "chat_count_limit": 20, // 1分钟内最多发送消息数（-1则不限制）
-  "chat_ban_time": 300    // 刷屏后禁言时间（秒）
+  "chat_ban_time": 300,   // 刷屏后禁言时间（秒）
+  "api_qq_enable": False  //QQ消息API(默认关闭)
 }
 ```
 

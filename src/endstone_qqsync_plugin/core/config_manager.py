@@ -28,7 +28,8 @@ class ConfigManager:
             "sync_group_card": True,
             "check_group_member": True,
             "chat_count_limit": 20,
-            "chat_ban_time": 300
+            "chat_ban_time": 300,
+            "api_qq_enable": False
         }
         self._init_config()
     

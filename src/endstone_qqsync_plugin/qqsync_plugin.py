@@ -293,19 +293,23 @@ class qqsync(Plugin):
         
     def api_send_message(self, text: str) -> bool:
         """
-        发送QQ群消息API
+        QQ消息API
         """
-        try:
-            asyncio.run_coroutine_threadsafe(
-                send_group_msg(self._current_ws, group_id=self.config_manager.get_config("target_group"), text=text),
-                self._loop
-            )
+        api_qq_enabled = self.config_manager.get_config("api_qq_enable", False)
+        if api_qq_enabled:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    send_group_msg(self._current_ws, group_id=self.config_manager.get_config("target_group"), text=text),
+                    self._loop
+                )
 
-            # 不等待结果，立即返回成功
-            return True
-            
-        except Exception:
-            return False
+                # 不等待结果，立即返回成功
+                return True
+                
+            except Exception:
+                return False
+        else:
+            self.logger.warning("QQ消息API功能未启用！")
 
     def on_disable(self) -> None:
         """插件禁用"""
