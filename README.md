@@ -200,6 +200,19 @@ bedrock_server/plugins/qqsync_plugin/config.json
 - **空消息**：无内容时显示 `[空消息]`
 - **CQ码兼容**：自动解析 NapCat 的 CQ 码格式
 
+## 📨 QQ消息API
+
+### 🛠️ 使用示例
+```python
+qqsync = self.server.plugin_manager.get_plugin('qqsync_plugin')
+success = qqsync.api_send_message("测试消息，QQSync API 正常工作~")
+
+if success:
+  self.logger.info("✅ 消息发送成功")
+else:
+  self.logger.info("❌ 消息发送失败")
+```
+
 ### 🔐 QQ绑定问题
 **验证码收不到？**
 - 确认QQ号输入正确
