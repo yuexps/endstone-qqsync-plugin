@@ -41,7 +41,8 @@ RUN cat > /app/lagrange/appsettings.json <<'EOF'
 EOF
 
 # 6. 启动脚本（信号转发 + 日志）
-RUN echo '#!/bin/bash
+RUN cat > /app/start.sh <<'EOF'
+#!/bin/bash
 set -euo pipefail
 log() { echo "[$(date +%F\ %T)] $*"; }
 
@@ -54,7 +55,8 @@ log "Lagrange ready"
 log "Starting Endstone..."
 cd /app/endstone
 exec endstone > /app/logs/endstone.log 2>&1
-' > /app/start.sh && chmod +x /app/start.sh
+EOF
+RUN chmod +x /app/start.sh
 
 # 7. 健康检查 & 端口
 HEALTHCHECK --interval=30s --timeout=2s --start-period=30s --retries=3 \
