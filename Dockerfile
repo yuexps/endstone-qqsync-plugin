@@ -84,6 +84,7 @@ if [ -z "$(ls -A /app/lagrange)" ]; then
 fi
 
 log "Starting Lagrange.OneBot..."
+log "第一次启动需打开./lagrange/qr-0.png扫码登录"
 cd /app/lagrange
 ./Lagrange.OneBot > /app/logs/lagrange.log 2>&1 &
 while ! nc -z 127.0.0.1 3001; do sleep 1; done
