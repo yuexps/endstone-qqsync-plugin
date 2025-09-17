@@ -24,8 +24,9 @@ RUN wget -q -O- https://github.com/LagrangeDev/Lagrange.Core/releases/download/n
  | tar -zxf - -C /app/lagrange \
  && chmod +x /app/lagrange/Lagrange.OneBot
 
-# 5. 配置文件（内嵌）
-RUN echo '{
+# 5. 配置文件
+RUN cat > /app/lagrange/appsettings.json <<'EOF'
+{
   "$schema": "https://raw.githubusercontent.com/LagrangeDev/Lagrange.Core/master/Lagrange.OneBot/Resources/appsettings_schema.json",
   "Logging": { "LogLevel": { "Default": "Information" } },
   "SignServerUrl": "https://sign.lagrangecore.org/api/sign/39038",
@@ -36,7 +37,8 @@ RUN echo '{
   "Implementations": [
     { "Type": "ForwardWebSocket", "Host": "127.0.0.1", "Port": 3001, "HeartBeatInterval": 5000, "HeartBeatEnable": true, "AccessToken": "" }
   ]
-}' > /app/lagrange/appsettings.json
+}
+EOF
 
 # 6. 启动脚本（信号转发 + 日志）
 RUN echo '#!/bin/bash
