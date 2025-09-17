@@ -77,6 +77,12 @@ RUN cat > /app/start.sh <<'EOF'
 set -euo pipefail
 log() { echo "[$(date +%F\ %T)] $*"; }
 
+# ---- 持久化初始化 ----
+if [ -z "$(ls -A /app/lagrange)" ]; then
+    log "Lagrange volume empty, copying from image template..."
+    cp -a /app/lagrange.image/* /app/lagrange/
+fi
+
 log "Starting Lagrange.OneBot..."
 cd /app/lagrange
 ./Lagrange.OneBot > /app/logs/lagrange.log 2>&1 &
