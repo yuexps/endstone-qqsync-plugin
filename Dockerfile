@@ -12,12 +12,12 @@ WORKDIR /app
 # 2. 创建统一目录
 RUN mkdir -p \
       /app/logs \
-      /app/endstone/plugins \
-      /app/lagrange/data \
+      /app/endstone \
+      /app/lagrange \
  && chmod -R 777 /app
 
 # 3. Python 层
-RUN pip install --no-cache-dir "endstone[bedrock]" endstone-qqsync-plugin
+RUN pip install --no-cache-dir "endstone" endstone-qqsync-plugin
 
 # 4. Lagrange 自包含包
 RUN wget -q -O- https://github.com/LagrangeDev/Lagrange.Core/releases/download/nightly/Lagrange.OneBot_linux-x64_net9.0_SelfContained.tar.gz \
