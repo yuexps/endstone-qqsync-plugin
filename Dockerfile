@@ -67,7 +67,11 @@ RUN cat > /app/lagrange/appsettings.json <<'EOF'
 }
 EOF
 
-# 6. 启动脚本（信号转发 + 日志）
+# 6. 预留模板目录（供 start.sh 首次填充）
+RUN mkdir -p /app/lagrange.image && \
+    cp -a /app/lagrange/* /app/lagrange.image/
+
+# 7. 启动脚本（信号转发 + 日志）
 RUN cat > /app/start.sh <<'EOF'
 #!/bin/bash
 set -euo pipefail
@@ -86,7 +90,7 @@ exec endstone -r https://ghfast.top/https://raw.githubusercontent.com/EndstoneMC
 EOF
 RUN chmod +x /app/start.sh
 
-# 7. 构建验收（倒数第二 RUN）
+# 8. 构建验收
 RUN set -ex && \
     echo "=== Check Lagrange ===" && \
     ls -l /app/lagrange && \
@@ -98,7 +102,7 @@ RUN set -ex && \
     test -x /app/start.sh && \
     echo "=== All OK ==="
 
-# 8. 健康检查 & 端口
+# 9. 健康检查 & 端口
 HEALTHCHECK --interval=30s --timeout=2s --start-period=30s --retries=3 \
   CMD nc -z -u 127.0.0.1 19132 || exit 1
 EXPOSE 19132/udp
