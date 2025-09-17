@@ -1,0 +1,20 @@
+version: "3.9"
+services:
+  endstone:
+    build: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "19132:19132/udp"
+    volumes:
+      - ./data/worlds:/app/endstone/bedrock_server   # 世界存档
+      - ./data/plugins:/app/endstone/plugins         # Python 插件
+      - ./data/lagrange:/app/lagrange/data           # QQ 登录态
+      - ./logs:/app/logs                             # 日志
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
