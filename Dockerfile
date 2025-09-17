@@ -27,16 +27,39 @@ RUN wget -q -O- https://github.com/LagrangeDev/Lagrange.Core/releases/download/n
 # 5. 配置文件
 RUN cat > /app/lagrange/appsettings.json <<'EOF'
 {
-  "$schema": "https://raw.githubusercontent.com/LagrangeDev/Lagrange.Core/master/Lagrange.OneBot/Resources/appsettings_schema.json",
-  "Logging": { "LogLevel": { "Default": "Information" } },
-  "SignServerUrl": "https://sign.lagrangecore.org/api/sign/39038",
-  "Account": { "Uin": 0, "Password": "", "Protocol": "Linux", "AutoReconnect": true, "GetOptimumServer": true },
-  "Message": { "IgnoreSelf": true, "StringPost": true },
-  "QrCode": { "ConsoleCompatibilityMode": true },
-  "DataDirectory": "/app/lagrange/data",
-  "Implementations": [
-    { "Type": "ForwardWebSocket", "Host": "127.0.0.1", "Port": 3001, "HeartBeatInterval": 5000, "HeartBeatEnable": true, "AccessToken": "" }
-  ]
+    "$schema": "https://raw.githubusercontent.com/LagrangeDev/Lagrange.Core/master/Lagrange.OneBot/Resources/appsettings_schema.json",
+    "Logging": {
+        "LogLevel": {
+            "Default": "Information"
+        }
+    },
+    "SignServerUrl": "https://sign.lagrangecore.org/api/sign/39038",
+    "SignProxyUrl": "",
+    "MusicSignServerUrl": "",
+    "Account": {
+        "Uin": 0,
+        "Password": "",
+        "Protocol": "Linux",
+        "AutoReconnect": true,
+        "GetOptimumServer": true
+    },
+    "Message": {
+        "IgnoreSelf": true,
+        "StringPost": false
+    },
+    "QrCode": {
+        "ConsoleCompatibilityMode": false
+    },
+    "Implementations": [
+        {
+            "Type": "ForwardWebSocket",
+            "Host": "127.0.0.1",
+            "Port": 3001,
+            "HeartBeatInterval": 5000,
+            "HeartBeatEnable": true,
+            "AccessToken": ""
+        }
+    ]
 }
 EOF
 
