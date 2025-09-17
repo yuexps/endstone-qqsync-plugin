@@ -86,7 +86,19 @@ exec endstone -r https://ghfast.top/https://raw.githubusercontent.com/EndstoneMC
 EOF
 RUN chmod +x /app/start.sh
 
-# 7. 健康检查 & 端口
+# 7. 构建验收（倒数第二 RUN）
+RUN set -ex && \
+    echo "=== Check Lagrange ===" && \
+    ls -l /app/lagrange && \
+    test -x /app/lagrange/Lagrange.OneBot && \
+    test -f /app/lagrange/appsettings.json && \
+    echo "=== Check Endstone ===" && \
+    python -c "import endstone,sys,os; print('endstone ver.', endstone.__version__)" && \
+    echo "=== Check start.sh ===" && \
+    test -x /app/start.sh && \
+    echo "=== All OK ==="
+
+# 8. 健康检查 & 端口
 HEALTHCHECK --interval=30s --timeout=2s --start-period=30s --retries=3 \
   CMD nc -z -u 127.0.0.1 19132 || exit 1
 EXPOSE 19132/udp
