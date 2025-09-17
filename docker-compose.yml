@@ -1,5 +1,6 @@
 services:
   endstone:
+    container_name: endstone-qqsync
     image: ghcr.io/yuexps/endstone-qqsync-plugin:latest
     init: true
     restart: unless-stopped
