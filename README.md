@@ -214,6 +214,33 @@ else:
   self.logger.info("❌ 消息发送失败")
 ```
 
+## 🐳 Docker
+
+### Docker compose （已内置QQ协议端，根据提示扫码登陆即可）
+```yaml
+services:
+  endstone:
+    container_name: endstone-qqsync
+    image: ghcr.io/yuexps/endstone-qqsync-plugin:latest
+    init: true
+    restart: unless-stopped
+    ports:
+      - "19132:19132/udp"
+    volumes:
+      - ./logs:/app/logs:rw
+      - ./lagrange:/app/lagrange:rw
+      - ./bedrock_server:/app/endstone/bedrock_server:rw
+    environment:
+      - TZ=Asia/Shanghai
+    stdin_open: true
+    tty: true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+```
+
 ### 🔐 QQ绑定问题
 **验证码收不到？**
 - 确认QQ号输入正确
