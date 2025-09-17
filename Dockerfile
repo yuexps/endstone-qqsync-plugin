@@ -4,9 +4,9 @@ LABEL maintainer="yuexps" description="Endstone + QQSync + Lagrange (All-in-One,
 
 # 1. 最小系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget ca-certificates tar curl libicu74 libssl3 zlib1g netcat-traditional \
+    wget ca-certificates tar curl libssl3 zlib1g netcat-traditional \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
-
+ 
 WORKDIR /app
 
 # 2. 创建统一目录
