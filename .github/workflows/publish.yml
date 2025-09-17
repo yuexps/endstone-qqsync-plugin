@@ -1,0 +1,40 @@
+name: Build Wheels & Upload PyPI
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build_wheel:
+    name: Build wheel
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip build
+
+      - name: Build wheel
+        run: python -m build --wheel --outdir dist
+
+      - name: Upload wheel(s)
+        uses: actions/upload-artifact@v4
+        with:
+          name: qqsync_build
+          path: dist/*.whl
+          retention-days: 90
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade twine
+          twine upload dist/*.whl
