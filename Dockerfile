@@ -20,11 +20,13 @@ RUN mkdir -p \
 RUN pip install --no-cache-dir "endstone" endstone-qqsync-plugin
 
 # 4. Lagrange 自包含包
-RUN wget -qO- https://github.com/LagrangeDev/Lagrange.Core/releases/download/nightly/Lagrange.OneBot_linux-x64_net9.0_SelfContained.tar.gz \
- | tar -zxf - -C /tmp \
- && mv /tmp/*/bin/Release/net9.0/linux-x64/publish/* /app/lagrange/ \
- && rm -rf /tmp/Lagrange.OneBot* \
- && chmod +x /app/lagrange/Lagrange.OneBot
+RUN set -ex && \
+    mkdir -p /tmp/lag /app/lagrange && \
+    wget -qO- https://github.com/LagrangeDev/Lagrange.Core/releases/download/nightly/Lagrange.OneBot_linux-x64_net9.0_SelfContained.tar.gz \
+    | tar -zxf - -C /tmp/lag && \
+    mv /tmp/lag/*/bin/Release/net9.0/linux-x64/publish/* /app/lagrange/ && \
+    rm -rf /tmp/lag && \
+    chmod +x /app/lagrange/Lagrange.OneBot
 
 # 5. 配置文件
 RUN cat > /app/lagrange/appsettings.json <<'EOF'
