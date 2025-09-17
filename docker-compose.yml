@@ -6,6 +6,8 @@ services:
     ports:
       - "19132:19132/udp"
     volumes:
+      - ./logs:/app/logs:rw
+      - ./lagrange:/app/lagrange:rw
       - ./bedrock_server:/app/endstone/bedrock_server:rw
     environment:
       - TZ=Asia/Shanghai
