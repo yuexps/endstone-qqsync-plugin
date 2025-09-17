@@ -79,7 +79,8 @@ log "Lagrange ready"
 
 log "Starting Endstone..."
 cd /app/endstone
-exec endstone > /app/logs/endstone.log 2>&1
+# 使用镜像拉取 bedrock-server 元数据
+exec endstone -r https://ghfast.top/https://raw.githubusercontent.com/EndstoneMC/bedrock-server-data/v2 > /app/logs/endstone.log 2>&1
 EOF
 RUN chmod +x /app/start.sh
 
