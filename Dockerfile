@@ -86,13 +86,16 @@ fi
 log "Starting Lagrange.OneBot （第一次启动需打开./lagrange/qr-0.png扫码登录）"
 cd /app/lagrange
 ./Lagrange.OneBot > /app/logs/lagrange.log 2>&1 &
-while ! nc -z 127.0.0.1 3001; do sleep 1; done
-log "Lagrange ready"
+# 等待Lagrange启动完成
+while ! nc -z 127.0.0.1 3001; do 
+    sleep 1; 
+done
+log "Lagrange登录成功，开始启动Endstone服务器..."
 
 log "Starting Endstone..."
 cd /app/endstone
-# 使用镜像拉取 bedrock-server 元数据
-exec endstone -r https://ghfast.top/https://raw.githubusercontent.com/EndstoneMC/bedrock-server-data/v2 -y > /app/logs/endstone.log 2>&1
+# 使用镜像拉取 bedrock-server 元数据，同时输出日志到文件和控制台
+exec endstone -r https://ghfast.top/https://raw.githubusercontent.com/EndstoneMC/bedrock-server-data/v2 -y 2>&1 | tee /app/logs/endstone.log
 EOF
 RUN chmod +x /app/start.sh
 
