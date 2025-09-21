@@ -134,8 +134,7 @@ class EventHandlers:
             
             self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 加入游戏")
             
-            # 更新玩家加入时间
-            self.plugin.data_manager.update_player_join(player_name, player_xuid)
+            # 注意：在线时长统计现在由独立的计时器系统处理，不再依赖join/quit事件
             
             # 检查玩家名称是否发生变化（处理改名）
             existing_player = self.plugin.data_manager.get_player_by_xuid(player_xuid)
@@ -175,16 +174,15 @@ class EventHandlers:
                     delay=60  # 3秒延迟，确保玩家完全加载
                 )
 
-            # 发送QQ群通知（根据 force_bind_qq 配置决定是否必须绑定）
+            # 发送QQ群通知（现在为所有玩家发送通知，不再依赖绑定状态）
             if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
-                self.plugin.config_manager.get_config("enable_game_to_qq", True) and
-                (self.plugin.data_manager.is_player_bound(player_name, player_xuid) or not self.plugin.config_manager.get_config("force_bind_qq", True))):
+                self.plugin.config_manager.get_config("enable_game_to_qq", True)):
                 
                 import asyncio
                 from ..websocket.handlers import send_group_msg
                 
                 # 获取玩家统计信息
-                playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, self.plugin.server.online_players)
+                playtime_info = self.plugin.data_manager.get_player_playtime_info_with_timer(player_name, self.plugin.server.online_players)
                 session_count = playtime_info.get("session_count", 0)
                 
                 if session_count == 1:
@@ -210,8 +208,7 @@ class EventHandlers:
             
             self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 离开游戏")
             
-            # 更新玩家离开时间和游戏时长
-            self.plugin.data_manager.update_player_quit(player_name)
+            # 注意：在线时长统计现在由独立的计时器系统处理，不再依赖join/quit事件
             
             # 清理玩家相关缓存
             self.plugin.permission_manager.cleanup_player_permissions(player_name)
@@ -221,19 +218,16 @@ class EventHandlers:
             # 清理聊天相关数据
             self.cleanup_player_chat_data(player_name)
             
-            # 发送QQ群通知（根据 force_bind_qq 配置决定是否必须绑定）
+            # 发送QQ群通知（现在为所有玩家发送通知，不再依赖绑定状态）
             if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
-                self.plugin.config_manager.get_config("enable_game_to_qq", True) and
-                (self.plugin.data_manager.is_player_bound(player_name, player_xuid) or not self.plugin.config_manager.get_config("force_bind_qq", True))):
-            
+                self.plugin.config_manager.get_config("enable_game_to_qq", True)):
+                
                 import asyncio
                 from ..websocket.handlers import send_group_msg
-            
+                
                 # 获取玩家统计信息
-                playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, [])  # 玩家已离线，传入空列表
-                total_playtime = playtime_info.get("total_playtime", 0)
-            
-                # 格式化游戏时长
+                playtime_info = self.plugin.data_manager.get_player_playtime_info_with_timer(player_name, [])  # 玩家已离线，传入空列表
+                total_playtime = playtime_info.get("total_playtime", 0)                # 格式化游戏时长
                 hours = total_playtime // 3600
                 minutes = (total_playtime % 3600) // 60
             

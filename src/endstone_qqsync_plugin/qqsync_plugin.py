@@ -185,6 +185,14 @@ class qqsync(Plugin):
             delay=600,    # 30秒后首次执行 (30秒 × 20tick/秒)
             period=1200   # 每1分钟检查一次过期验证码 (60秒 × 20tick/秒)
         )
+        
+        # 在线时长计时器任务
+        self.server.scheduler.run_task(
+            self,
+            self._update_online_playtime_timers,
+            delay=1200,   # 30秒后首次执行 (30秒 × 20tick/秒)
+            period=1200   # 每1分钟更新一次 (60秒 × 20tick/秒)
+        )
 
     def _cleanup_expired_data(self):
         """清理过期数据"""
@@ -236,6 +244,18 @@ class qqsync(Plugin):
                     self.logger.warning("QQ服务连接断开，群成员缓存更新暂时不可用")
         except Exception as e:
             self.logger.error(f"更新群成员缓存失败: {e}")
+
+    def _update_online_playtime_timers(self):
+        """更新在线玩家的游戏时长计时器"""
+        try:
+            # 获取当前在线玩家列表
+            online_players = list(self.server.online_players)
+            
+            # 更新计时器
+            self.data_manager.update_online_timers(online_players)
+            
+        except Exception as e:
+            self.logger.error(f"更新在线时长计时器失败: {e}")
 
     def on_command(self, sender, command, args):
         """处理插件命令"""
@@ -336,6 +356,9 @@ class qqsync(Plugin):
 
             # 保存数据
             if hasattr(self, 'data_manager'):
+                # 清理计时器系统
+                self.data_manager.cleanup_timer_system()
+                # 保存最终数据
                 self.data_manager.save_data()
             
             # 停止WebSocket连接

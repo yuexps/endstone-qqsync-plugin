@@ -19,6 +19,11 @@ class DataManager:
         self.binding_file = data_folder / "data.json"
         self._binding_data: Dict[str, Any] = {}
         self._auto_save_enabled = True
+        
+        # 新的计时器系统变量
+        self._online_timer_start_times: Dict[str, int] = {}  # 玩家在线计时开始时间
+        self._last_timer_update: int = 0  # 上次计时器更新时间
+        
         self._init_binding_data()
     
     def _init_binding_data(self):
@@ -509,3 +514,142 @@ class DataManager:
     def binding_data(self) -> Dict[str, Any]:
         """获取完整绑定数据的副本"""
         return self._binding_data.copy()
+
+    # 新的计时器系统方法
+    def start_player_timer(self, player_name: str, player_xuid: str = None):
+        """开始玩家在线计时"""
+        # 检查是否已经在计时中，避免重复计时
+        if player_name in self._online_timer_start_times:
+            return
+        
+        current_time = int(TimeUtils.get_timestamp())
+        self._online_timer_start_times[player_name] = current_time
+        
+        # 确保玩家数据存在，如果不存在则创建
+        if player_name not in self._binding_data:
+            self._binding_data[player_name] = {
+                "name": player_name,
+                "xuid": player_xuid or "",
+                "qq": "",
+                "total_playtime": 0,
+                "last_join_time": current_time,
+                "last_quit_time": None,
+                "session_count": 0
+            }
+        
+        # 更新会话计数（只有在新开始计时时才增加）
+        self._binding_data[player_name]["session_count"] = self._binding_data[player_name].get("session_count", 0) + 1
+        self._binding_data[player_name]["last_join_time"] = current_time
+        
+        # 更新XUID（如果提供了新的XUID）
+        if player_xuid and not self._binding_data[player_name].get("xuid"):
+            self._binding_data[player_name]["xuid"] = player_xuid
+        
+        self.logger.info(f"玩家 {player_name} 开始在线计时")
+
+    def stop_player_timer(self, player_name: str):
+        """停止玩家在线计时"""
+        if player_name not in self._online_timer_start_times:
+            return
+        
+        start_time = self._online_timer_start_times[player_name]
+        current_time = int(TimeUtils.get_timestamp())
+        session_time = current_time - start_time
+        
+        if session_time > 0 and player_name in self._binding_data:
+            # 累加到总在线时间
+            self._binding_data[player_name]["total_playtime"] = self._binding_data[player_name].get("total_playtime", 0) + session_time
+            self._binding_data[player_name]["last_quit_time"] = current_time
+            self.logger.info(f"玩家 {player_name} 停止在线计时，本次会话时长: {session_time}秒")
+        
+        # 移除计时器记录
+        del self._online_timer_start_times[player_name]
+
+    def update_online_timers(self, online_players: List[Any]):
+        """更新所有在线玩家的计时器"""
+        current_time = int(TimeUtils.get_timestamp())
+        
+        # 获取当前在线的玩家名列表
+        online_player_names = set()
+        for player in online_players:
+            if hasattr(player, 'name') and hasattr(player, 'xuid'):
+                online_player_names.add(player.name)
+        
+        # 为新上线但未开始计时的玩家开始计时
+        for player in online_players:
+            if (hasattr(player, 'name') and hasattr(player, 'xuid') and 
+                player.name not in self._online_timer_start_times):
+                self.start_player_timer(player.name, player.xuid)
+        
+        # 停止已离线玩家的计时
+        offline_players = []
+        for player_name in list(self._online_timer_start_times.keys()):
+            if player_name not in online_player_names:
+                offline_players.append(player_name)
+        
+        for player_name in offline_players:
+            self.stop_player_timer(player_name)
+        
+        # 每5分钟保存一次在线时长数据（防止意外关机丢失数据）
+        if current_time - self._last_timer_update >= 300:  # 5分钟
+            self._save_timer_progress()
+            self._last_timer_update = current_time
+
+    def _save_timer_progress(self):
+        """保存当前在线玩家的计时进度"""
+        current_time = int(TimeUtils.get_timestamp())
+        
+        for player_name, start_time in self._online_timer_start_times.items():
+            if player_name in self._binding_data:
+                # 计算从开始计时到现在的时间
+                session_time = current_time - start_time
+                if session_time > 0:
+                    # 累加到总在线时间
+                    self._binding_data[player_name]["total_playtime"] = self._binding_data[player_name].get("total_playtime", 0) + session_time
+                    # 重置开始时间
+                    self._online_timer_start_times[player_name] = current_time
+        
+        # 保存数据
+        self.save_data()
+        if self._online_timer_start_times:
+            self.logger.info(f"已保存 {len(self._online_timer_start_times)} 个在线玩家的计时进度")
+
+    def get_player_playtime_info_with_timer(self, player_name: str, online_players: List[Any]) -> Dict[str, Any]:
+        """使用计时器系统获取玩家在线时间信息"""
+        if player_name not in self._binding_data:
+            return {}
+        
+        data = self._binding_data[player_name]
+        
+        current_time = int(TimeUtils.get_timestamp())
+        total_playtime = data.get("total_playtime", 0)
+        
+        # 检查玩家是否在线且正在计时
+        is_online = False
+        current_session_time = 0
+        if player_name in self._online_timer_start_times:
+            is_online = True
+            start_time = self._online_timer_start_times[player_name]
+            current_session_time = current_time - start_time
+        
+        total_with_current = total_playtime + current_session_time
+        
+        return {
+            "total_playtime": total_with_current,
+            "session_count": data.get("session_count", 0),
+            "last_join_time": data.get("last_join_time"),
+            "last_quit_time": data.get("last_quit_time"),
+            "is_online": is_online,
+            "current_session_time": current_session_time,
+            "bind_time": data.get("bind_time")
+        }
+
+    def cleanup_timer_system(self):
+        """清理计时器系统（在插件禁用时调用）"""
+        if self._online_timer_start_times:
+            self.logger.info("正在清理在线计时器系统...")
+            # 保存所有在线玩家的最终计时进度
+            self._save_timer_progress()
+            # 清空计时器
+            self._online_timer_start_times.clear()
+            self.logger.info("计时器系统清理完成")
