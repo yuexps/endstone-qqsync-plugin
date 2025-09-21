@@ -18,7 +18,7 @@ class TimeUtils:
     
     # NTP服务器列表，按优先级排序（基于中国大陆测试结果优化）
     NTP_SERVERS = [
-        'ntp1.aliyun.com',       # 阿里云NTP1 (45ms, 100%成功率) ⭐最佳
+        'ntp1.aliyun.com',       # 阿里云NTP1 (45ms, 100%成功率) 
         'cn.ntp.org.cn',         # 中国NTP服务器 (53ms, 100%成功率) 
         'time.edu.cn',           # 中国教育网 (58ms, 100%成功率)
         'ntp.aliyun.com',        # 阿里云主服务器 (61ms, 100%成功率)
@@ -104,7 +104,7 @@ class TimeUtils:
             local_time = datetime.datetime.now(CHINA_TZ)
             
             if is_accurate:
-                print(f"✅ 本地时间准确，当前时间（UTC+8）: {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"✅ 本地时间准确，当前时间(UTC+8): {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
                 return {
                     'success': True,
                     'local_time_accurate': True,
