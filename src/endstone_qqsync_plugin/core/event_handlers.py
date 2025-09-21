@@ -185,7 +185,7 @@ class EventHandlers:
                 from ..websocket.handlers import send_group_msg
                 
                 # 获取玩家统计信息
-                playtime_info = self.plugin.data_manager.get_player_playtime_info_with_timer(player_name, self.plugin.server.online_players)
+                playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, self.plugin.server.online_players)
                 session_count = playtime_info.get("session_count", 0)
                 
                 if session_count == 1:
@@ -232,7 +232,7 @@ class EventHandlers:
                 from ..websocket.handlers import send_group_msg
                 
                 # 获取玩家统计信息
-                playtime_info = self.plugin.data_manager.get_player_playtime_info_with_timer(player_name, [])  # 玩家已离线，传入空列表
+                playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, [])  # 玩家已离线，传入空列表
                 total_playtime = playtime_info.get("total_playtime", 0)                # 格式化游戏时长
                 hours = total_playtime // 3600
                 minutes = (total_playtime % 3600) // 60

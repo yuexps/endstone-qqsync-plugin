@@ -312,7 +312,7 @@ class DataManager:
         self.trigger_save(f"玩家离开: {player_name}")
     
     def get_player_playtime_info(self, player_name: str, online_players: List[Any]) -> Dict[str, Any]:
-        """获取玩家在线时间信息（旧版本方法，建议使用get_player_playtime_info_with_timer）"""
+        """使用计时器系统获取玩家在线时间信息"""
         if player_name not in self._binding_data:
             return {}
         
@@ -320,28 +320,24 @@ class DataManager:
         
         current_time = int(TimeUtils.get_timestamp())
         total_playtime = data.get("total_playtime", 0)
-        last_join = data.get("last_join_time")
         
-        # 如果玩家当前在线，加上当前会话时间
+        # 检查玩家是否在线且正在计时
         is_online = False
         current_session_time = 0
-        if last_join:
-            # 检查玩家是否在线
-            for player in online_players:
-                if player.name == player_name:
-                    is_online = True
-                    current_session_time = current_time - last_join
-                    break
+        if player_name in self._online_timer_start_times:
+            is_online = True
+            start_time = self._online_timer_start_times[player_name]
+            current_session_time = current_time - start_time
         
-        total_with_current = total_playtime + (current_session_time if is_online else 0)
+        total_with_current = total_playtime + current_session_time
         
         return {
             "total_playtime": total_with_current,
             "session_count": data.get("session_count", 0),
-            "last_join_time": last_join,
+            "last_join_time": data.get("last_join_time"),
             "last_quit_time": data.get("last_quit_time"),
             "is_online": is_online,
-            "current_session_time": current_session_time if is_online else 0,
+            "current_session_time": current_session_time,
             "bind_time": data.get("bind_time")
         }
     
@@ -602,36 +598,6 @@ class DataManager:
         self.save_data()
         if self._online_timer_start_times:
             self.logger.info(f"已保存 {len(self._online_timer_start_times)} 个在线玩家的计时进度")
-
-    def get_player_playtime_info_with_timer(self, player_name: str, online_players: List[Any]) -> Dict[str, Any]:
-        """使用计时器系统获取玩家在线时间信息"""
-        if player_name not in self._binding_data:
-            return {}
-        
-        data = self._binding_data[player_name]
-        
-        current_time = int(TimeUtils.get_timestamp())
-        total_playtime = data.get("total_playtime", 0)
-        
-        # 检查玩家是否在线且正在计时
-        is_online = False
-        current_session_time = 0
-        if player_name in self._online_timer_start_times:
-            is_online = True
-            start_time = self._online_timer_start_times[player_name]
-            current_session_time = current_time - start_time
-        
-        total_with_current = total_playtime + current_session_time
-        
-        return {
-            "total_playtime": total_with_current,
-            "session_count": data.get("session_count", 0),
-            "last_join_time": data.get("last_join_time"),
-            "last_quit_time": data.get("last_quit_time"),
-            "is_online": is_online,
-            "current_session_time": current_session_time,
-            "bind_time": data.get("bind_time")
-        }
 
     def cleanup_timer_system(self):
         """清理计时器系统（在插件禁用时调用）"""
