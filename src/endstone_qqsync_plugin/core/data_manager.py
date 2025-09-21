@@ -274,15 +274,22 @@ class DataManager:
     
     # 游戏统计相关方法
     def update_player_join(self, player_name: str, player_xuid: str = None):
-        """更新玩家加入时间"""
-        if player_name not in self._binding_data:
-            return
-        
-        # 检查玩家是否已绑定QQ
-        if not self._binding_data[player_name].get("qq", "").strip():
-            return
-        
+        """更新玩家加入时间和进服次数（为所有玩家记录，不检查QQ绑定）"""
         current_time = int(TimeUtils.get_timestamp())
+        
+        # 确保玩家数据存在，如果不存在则创建
+        if player_name not in self._binding_data:
+            self._binding_data[player_name] = {
+                "name": player_name,
+                "xuid": player_xuid or "",
+                "qq": "",
+                "total_playtime": 0,
+                "last_join_time": current_time,
+                "last_quit_time": None,
+                "session_count": 0
+            }
+        
+        # 更新加入时间和会话计数
         self._binding_data[player_name]["last_join_time"] = current_time
         self._binding_data[player_name]["session_count"] = self._binding_data[player_name].get("session_count", 0) + 1
         
@@ -293,36 +300,23 @@ class DataManager:
         self.trigger_save(f"玩家加入: {player_name}")
     
     def update_player_quit(self, player_name: str):
-        """更新玩家离开时间和总在线时间"""
+        """更新玩家离开时间（为所有玩家记录，不检查QQ绑定，不处理在线时长累计）"""
         if player_name not in self._binding_data:
             return
         
-        # 检查玩家是否已绑定QQ
-        if not self._binding_data[player_name].get("qq", "").strip():
-            return
-        
         current_time = int(TimeUtils.get_timestamp())
-        last_join = self._binding_data[player_name].get("last_join_time")
-        
-        if last_join:
-            # 计算本次会话时间
-            session_time = current_time - last_join
-            if session_time > 0:
-                self._binding_data[player_name]["total_playtime"] = self._binding_data[player_name].get("total_playtime", 0) + session_time
-        
         self._binding_data[player_name]["last_quit_time"] = current_time
+        
+        # 注意：在线时长累计现在由计时器系统处理，这里只记录退出时间
+        
         self.trigger_save(f"玩家离开: {player_name}")
     
     def get_player_playtime_info(self, player_name: str, online_players: List[Any]) -> Dict[str, Any]:
-        """获取玩家在线时间信息"""
+        """获取玩家在线时间信息（旧版本方法，建议使用get_player_playtime_info_with_timer）"""
         if player_name not in self._binding_data:
             return {}
         
         data = self._binding_data[player_name]
-        
-        # 检查玩家是否已绑定QQ
-        if not data.get("qq", "").strip():
-            return {}
         
         current_time = int(TimeUtils.get_timestamp())
         total_playtime = data.get("total_playtime", 0)
@@ -537,10 +531,6 @@ class DataManager:
                 "session_count": 0
             }
         
-        # 更新会话计数（只有在新开始计时时才增加）
-        self._binding_data[player_name]["session_count"] = self._binding_data[player_name].get("session_count", 0) + 1
-        self._binding_data[player_name]["last_join_time"] = current_time
-        
         # 更新XUID（如果提供了新的XUID）
         if player_xuid and not self._binding_data[player_name].get("xuid"):
             self._binding_data[player_name]["xuid"] = player_xuid
@@ -559,7 +549,6 @@ class DataManager:
         if session_time > 0 and player_name in self._binding_data:
             # 累加到总在线时间
             self._binding_data[player_name]["total_playtime"] = self._binding_data[player_name].get("total_playtime", 0) + session_time
-            self._binding_data[player_name]["last_quit_time"] = current_time
             self.logger.info(f"玩家 {player_name} 停止在线计时，本次会话时长: {session_time}秒")
         
         # 移除计时器记录

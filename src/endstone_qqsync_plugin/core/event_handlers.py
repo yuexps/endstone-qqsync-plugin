@@ -134,7 +134,10 @@ class EventHandlers:
             
             self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 加入游戏")
             
-            # 注意：在线时长统计现在由独立的计时器系统处理，不再依赖join/quit事件
+            # 记录玩家加入时间和进服次数（使用join/quit事件记录）
+            self.plugin.data_manager.update_player_join(player_name, player_xuid)
+            
+            # 注意：在线时长累计现在由独立的计时器系统处理，不再依赖join/quit事件
             
             # 检查玩家名称是否发生变化（处理改名）
             existing_player = self.plugin.data_manager.get_player_by_xuid(player_xuid)
@@ -208,7 +211,10 @@ class EventHandlers:
             
             self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 离开游戏")
             
-            # 注意：在线时长统计现在由独立的计时器系统处理，不再依赖join/quit事件
+            # 记录玩家退出时间（使用join/quit事件记录）
+            self.plugin.data_manager.update_player_quit(player_name)
+            
+            # 注意：在线时长累计现在由独立的计时器系统处理，不再依赖join/quit事件
             
             # 清理玩家相关缓存
             self.plugin.permission_manager.cleanup_player_permissions(player_name)
