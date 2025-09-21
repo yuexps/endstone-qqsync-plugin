@@ -52,9 +52,7 @@ class qqsync(Plugin):
         time_init_result = TimeUtils.initialize_time_system()
         
         if time_init_result.get('success', True):
-            if time_init_result.get('local_time_accurate', True):
-                self.logger.info(f"{ColorFormat.GREEN}✅ 本地时间准确，将优先使用本地时间{ColorFormat.RESET}")
-            else:
+            if not time_init_result.get('local_time_accurate', True):
                 self.logger.info(f"{ColorFormat.YELLOW}⚠️ 本地时间不准确，将使用网络时间同步{ColorFormat.RESET}")
         else:
             self.logger.warning(f"{ColorFormat.RED}⚠️ 时间系统初始化失败，使用默认本地时间{ColorFormat.RESET}")

@@ -96,10 +96,7 @@ class TimeUtils:
                 'message': '时间系统已初始化'
             }
         
-        try:
-            print("🕐 正在检查时间准确性...")
-            print("🌐 优先使用中国大陆NTP服务器进行时间同步")
-            
+        try:  
             # 检查本地时间准确性
             is_accurate = cls.check_local_time_accuracy()
             cls._time_check_performed = True
@@ -107,8 +104,7 @@ class TimeUtils:
             local_time = datetime.datetime.now(CHINA_TZ)
             
             if is_accurate:
-                print(f"✅ 本地时间准确，将优先使用本地时间")
-                print(f"📅 当前时间: {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"✅ 本地时间准确，当前时间（UTC+8）: {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
                 return {
                     'success': True,
                     'local_time_accurate': True,
