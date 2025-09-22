@@ -943,14 +943,25 @@ async def _forward_message_to_game(message_data: dict, display_name: str):
             return
         
         # 转发到游戏 - 使用调度器确保在主线程执行
-        _plugin_instance.logger.info(f"{ColorFormat.GREEN}[QQ群] {ColorFormat.AQUA}{clean_message}{ColorFormat.RESET}")
         game_message = f"{ColorFormat.GREEN}[QQ群] {ColorFormat.AQUA}{clean_message}{ColorFormat.RESET}"
+        
+        if _plugin_instance:
+            _plugin_instance.logger.info(f"{ColorFormat.GREEN}[QQ群] {ColorFormat.AQUA}{clean_message}{ColorFormat.RESET}")
+
+            # 为webui写入聊天历史记录
+            webui = _plugin_instance.server.plugin_manager.get_plugin('qqsync_webui_plugin')
+            if webui:
+                try:
+                    webui.on_message_sent(sender=display_name, content=parsed_message, msg_type="chat", direction="qq_to_game")
+                except Exception as e:
+                    _plugin_instance.logger.warning(f"webui on_message_sent调用失败: {e}")
         
         def send_to_players():
             """在主线程中发送消息给所有玩家"""
             try:
                 for player in _plugin_instance.server.online_players:
                     player.send_message(game_message)
+
             except Exception as e:
                 if _plugin_instance:
                     _plugin_instance.logger.error(f"发送游戏消息失败: {e}")

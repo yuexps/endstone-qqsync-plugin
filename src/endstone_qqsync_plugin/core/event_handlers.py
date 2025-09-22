@@ -324,6 +324,14 @@ class EventHandlers:
                     send_group_msg(self.plugin._current_ws, group_id=self.plugin.config_manager.get_config("target_group"), text=chat_msg),
                     self.plugin._loop
                 )
+
+                # 为webui写入聊天历史记录
+                webui = self.plugin.server.plugin_manager.get_plugin('qqsync_webui_plugin')
+                if webui:
+                    try:
+                        webui.on_message_sent(sender=player_name, content=message, msg_type="chat", direction="game_to_qq")
+                    except Exception as e:
+                        self.logger.warning(f"webui on_message_snet调用失败: {e}")
                 
         except Exception as e:
             self.logger.error(f"处理玩家聊天事件失败: {e}")
