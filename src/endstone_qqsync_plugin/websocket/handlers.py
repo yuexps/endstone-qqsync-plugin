@@ -943,6 +943,7 @@ async def _forward_message_to_game(message_data: dict, display_name: str):
             return
         
         # 转发到游戏 - 使用调度器确保在主线程执行
+        _plugin_instance.logger.info(f"{ColorFormat.GREEN}[QQ群] {ColorFormat.AQUA}{clean_message}{ColorFormat.RESET}")
         game_message = f"{ColorFormat.GREEN}[QQ群] {ColorFormat.AQUA}{clean_message}{ColorFormat.RESET}"
         
         def send_to_players():

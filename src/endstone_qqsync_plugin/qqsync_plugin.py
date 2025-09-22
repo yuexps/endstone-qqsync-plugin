@@ -79,7 +79,7 @@ class qqsync(Plugin):
             
             # 设置全局插件实例引用
             set_plugin_instance(self)
-            
+
             # 启动消息
             startup_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已启用 (重构版本){ColorFormat.RESET}"
             self.logger.info(startup_msg)
