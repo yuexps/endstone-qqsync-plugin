@@ -5,7 +5,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Union
 
 
 class ConfigManager:
@@ -20,7 +20,8 @@ class ConfigManager:
         self.default_config = {
             "napcat_ws": "ws://127.0.0.1:3001",
             "access_token": "",
-            "target_group": 712523104,
+            "target_groups": [712523104],  # 改为支持多个群聊
+            "group_names": {},  # 群组名称映射 {group_id: group_name}
             "admins": ["2899659758"],
             "enable_qq_to_game": True,
             "enable_game_to_qq": True,
@@ -65,6 +66,18 @@ class ConfigManager:
                 self._config[key] = value
                 config_updated = True
                 self.logger.info(f"添加新配置项: {key}")
+        
+        # 兼容旧配置格式 - 如果存在target_group单个配置，转换为target_groups数组
+        if "target_group" in self._config and "target_groups" not in self._config:
+            self._config["target_groups"] = [self._config["target_group"]]
+            config_updated = True
+            self.logger.info("已将旧配置项 target_group 转换为 target_groups")
+        
+        # 确保 group_names 配置项存在
+        if "group_names" not in self._config:
+            self._config["group_names"] = {}
+            config_updated = True
+            self.logger.info("添加新配置项: group_names")
         
         # 生成动态帮助信息
         self._config["help_msg"] = self._generate_help_message()
@@ -149,7 +162,7 @@ class ConfigManager:
         
         self.logger.info(f"{ColorFormat.AQUA}配置文件已加载{ColorFormat.RESET}")
         self.logger.info(f"{ColorFormat.GOLD}NapCat WebSocket: {ColorFormat.WHITE}{self._config.get('napcat_ws')}{ColorFormat.RESET}")
-        self.logger.info(f"{ColorFormat.GOLD}目标QQ群: {ColorFormat.WHITE}{self._config.get('target_group')}{ColorFormat.RESET}")
+        self.logger.info(f"{ColorFormat.GOLD}目标QQ群: {ColorFormat.WHITE}{self._config.get('target_groups')}{ColorFormat.RESET}")
         self.logger.info(f"{ColorFormat.GOLD}管理员列表: {ColorFormat.WHITE}{self._config.get('admins')}{ColorFormat.RESET}")
         
         force_bind_enabled = self._config.get('force_bind_qq', True)
@@ -203,6 +216,18 @@ class ConfigManager:
                     self._config[key] = value
                     config_updated = True
                     self.logger.info(f"添加新配置项: {key}")
+            
+            # 兼容旧配置格式 - 如果存在target_group单个配置，转换为target_groups数组
+            if "target_group" in self._config and "target_groups" not in self._config:
+                self._config["target_groups"] = [self._config["target_group"]]
+                config_updated = True
+                self.logger.info("已将旧配置项 target_group 转换为 target_groups")
+            
+            # 确保 group_names 配置项存在
+            if "group_names" not in self._config:
+                self._config["group_names"] = {}
+                config_updated = True
+                self.logger.info("添加新配置项: group_names")
             
             # 重新生成动态帮助信息
             self._config["help_msg"] = self._generate_help_message()

@@ -60,20 +60,19 @@ class WebSocketClient:
                     
                     self.logger.info("✅ 已连接 NapCat WS")
                     
-                    # 连接成功后立即获取群成员列表
+                    # 连接成功后立即获取所有群成员列表
                     try:
-                        from .handlers import get_group_member_list
-                        target_group = self.plugin.config_manager.get_config("target_group")
-                        await get_group_member_list(websocket, target_group)
+                        from .handlers import get_all_groups_member_list
+                        await get_all_groups_member_list(websocket)
                     except Exception as e:
                         self.logger.warning(f"获取群成员列表失败: {e}")
                     
                     # 发送服务器启动消息（如果插件刚启动）
                     try:
                         if hasattr(self.plugin, '_send_startup_message') and self.plugin._send_startup_message:
-                            from .handlers import send_group_msg
+                            from .handlers import send_group_msg_to_all_groups
                             server_start_msg = "[QQSync] 服务器已启动！"
-                            await send_group_msg(websocket, group_id=target_group, text=server_start_msg)
+                            await send_group_msg_to_all_groups(websocket, server_start_msg)
                             self.plugin._send_startup_message = False  # 只发送一次
                     except Exception as e:
                         self.logger.warning(f"发送启动消息失败: {e}")
