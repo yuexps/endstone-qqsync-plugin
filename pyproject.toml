@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "endstone-qqsync-plugin"
-version = "0.1.1dev3"
+version = "0.1.1dev4"
 description = "Endstone QQsync群服互通插件 - 支持双向消息同步、服务器信息查询、管理命令执行"
 readme = "README.md"
 requires-python = ">=3.11"

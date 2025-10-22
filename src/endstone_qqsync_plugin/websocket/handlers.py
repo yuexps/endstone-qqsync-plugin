@@ -692,9 +692,13 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 except Exception as e:
                     reply = f"❌ 命令执行失败: {str(e)}"
             
-            elif cmd == "who" and len(args) == 1:
+            elif cmd == "who" and len(args) >= 1:
                 # 查询玩家信息
-                search_input = args[0]
+                # 修复包含空格的玩家名处理问题
+                search_input = " ".join(args)
+                # 处理带双引号的玩家名
+                if search_input.startswith('"') and search_input.endswith('"') and len(search_input) >= 2:
+                    search_input = search_input[1:-1]
                 target_player = None
                 player_data = None
                 

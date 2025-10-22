@@ -315,10 +315,7 @@ class EventHandlers:
                 player_qq = self.plugin.data_manager.get_player_qq(player_name)
                 
                 # 构建聊天消息
-                if player_qq:
-                    chat_msg = f"💬 {player_name}({player_qq}): {filtered_message}"
-                else:
-                    chat_msg = f"💬 {player_name}: {filtered_message}"
+                chat_msg = f"💬 {player_name}: {filtered_message}"
                 
                 # 如果包含敏感内容，记录日志
                 if has_sensitive:
