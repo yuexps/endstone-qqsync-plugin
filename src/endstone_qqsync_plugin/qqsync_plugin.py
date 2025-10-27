@@ -15,7 +15,7 @@ from .core import (
     EventHandlers
 )
 from .websocket import WebSocketClient
-from .websocket.handlers import set_plugin_instance, send_group_msg
+from .websocket.handlers import set_plugin_instance, send_group_msg_to_all_groups
 from .ui import UIManager
 from .utils.time_utils import TimeUtils
 from .utils.message_utils import parse_qq_message
@@ -228,10 +228,9 @@ class qqsync(Plugin):
                 return
                 
             if self._current_ws:
-                target_group = self.config_manager.get_config("target_group")
-                from .websocket.handlers import get_group_member_list
+                from .websocket.handlers import get_all_groups_member_list
                 asyncio.run_coroutine_threadsafe(
-                    get_group_member_list(self._current_ws, target_group),
+                    get_all_groups_member_list(self._current_ws),
                     self._loop
                 )
             else:
@@ -317,7 +316,7 @@ class qqsync(Plugin):
         if api_qq_enabled:
             try:
                 asyncio.run_coroutine_threadsafe(
-                    send_group_msg(self._current_ws, group_id=self.config_manager.get_config("target_group"), text=text),
+                    send_group_msg_to_all_groups(self._current_ws, text=text),
                     self._loop
                 )
 
@@ -341,7 +340,7 @@ class qqsync(Plugin):
                 try:
                     server_end_msg = "[QQSync] 服务器已停止！"
                     future = asyncio.run_coroutine_threadsafe(
-                        send_group_msg(self._current_ws, group_id=self.config_manager.get_config("target_group"), text=server_end_msg),
+                        send_group_msg_to_all_groups(self._current_ws, server_end_msg),
                         self._loop
                     )
                     # 等待消息发送完成，但设置超时

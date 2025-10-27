@@ -149,13 +149,12 @@ class EventHandlers:
                         self.plugin.config_manager.get_config("force_bind_qq", True) and 
                         self.plugin.config_manager.get_config("sync_group_card", True)):
                         
-                        target_group = self.plugin.config_manager.get_config("target_group")
                         qq_number = existing_player.get("qq")
                         if qq_number:
                             import asyncio
-                            from ..websocket.handlers import set_group_card
+                            from ..websocket.handlers import set_group_card_in_all_groups
                             asyncio.run_coroutine_threadsafe(
-                                set_group_card(self.plugin._current_ws, group_id=target_group, user_id=int(qq_number), card=player_name),
+                                set_group_card_in_all_groups(self.plugin._current_ws, user_id=int(qq_number), card=player_name),
                                 self.plugin._loop
                             )
             
@@ -182,7 +181,7 @@ class EventHandlers:
                 self.plugin.config_manager.get_config("enable_game_to_qq", True)):
                 
                 import asyncio
-                from ..websocket.handlers import send_group_msg
+                from ..websocket.handlers import send_group_msg_to_all_groups
                 
                 # 获取玩家统计信息
                 playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, self.plugin.server.online_players)
@@ -194,7 +193,7 @@ class EventHandlers:
                     join_msg = f"🟢 玩家 {player_name} 加入游戏 (第{session_count}次游戏)"
                 
                 asyncio.run_coroutine_threadsafe(
-                    send_group_msg(self.plugin._current_ws, group_id=self.plugin.config_manager.get_config("target_group"), text=join_msg),
+                    send_group_msg_to_all_groups(self.plugin._current_ws, text=join_msg),
                     self.plugin._loop
                 )
                 
@@ -229,7 +228,7 @@ class EventHandlers:
                 self.plugin.config_manager.get_config("enable_game_to_qq", True)):
                 
                 import asyncio
-                from ..websocket.handlers import send_group_msg
+                from ..websocket.handlers import send_group_msg_to_all_groups
                 
                 # 获取玩家统计信息
                 playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, [])  # 玩家已离线，传入空列表
@@ -245,7 +244,7 @@ class EventHandlers:
                 quit_msg = f"🔴 玩家 {player_name} 离开游戏 (总游戏时长: {playtime_str})"
             
                 asyncio.run_coroutine_threadsafe(
-                    send_group_msg(self.plugin._current_ws, group_id=self.plugin.config_manager.get_config("target_group"), text=quit_msg),
+                    send_group_msg_to_all_groups(self.plugin._current_ws, text=quit_msg),
                     self.plugin._loop
                 )
                 
@@ -306,11 +305,14 @@ class EventHandlers:
                 (self.plugin.data_manager.is_player_bound(player_name, player.xuid) or not self.plugin.config_manager.get_config("force_bind_qq", True))):
                 
                 import asyncio
-                from ..websocket.handlers import send_group_msg
+                from ..websocket.handlers import send_group_msg_to_all_groups
                 from ..utils.message_utils import filter_sensitive_content
                 
                 # 过滤敏感内容
                 filtered_message, has_sensitive = filter_sensitive_content(message)
+                
+                # 获取玩家绑定的QQ号（如果有的话）
+                player_qq = self.plugin.data_manager.get_player_qq(player_name)
                 
                 # 构建聊天消息
                 chat_msg = f"💬 {player_name}: {filtered_message}"
@@ -321,7 +323,7 @@ class EventHandlers:
                 
                 # 发送过滤后的消息到QQ群
                 asyncio.run_coroutine_threadsafe(
-                    send_group_msg(self.plugin._current_ws, group_id=self.plugin.config_manager.get_config("target_group"), text=chat_msg),
+                    send_group_msg_to_all_groups(self.plugin._current_ws, text=chat_msg),
                     self.plugin._loop
                 )
 
@@ -349,7 +351,7 @@ class EventHandlers:
                 self.plugin.data_manager.is_player_bound(player_name, player.xuid)):
                 
                 import asyncio
-                from ..websocket.handlers import send_group_msg
+                from ..websocket.handlers import send_group_msg_to_all_groups
 
                 # 构建死亡消息
                 try:
@@ -362,7 +364,7 @@ class EventHandlers:
                 
                 # 发送消息到QQ群
                 asyncio.run_coroutine_threadsafe(
-                    send_group_msg(self.plugin._current_ws, group_id=self.plugin.config_manager.get_config("target_group"), text=death_msg),
+                    send_group_msg_to_all_groups(self.plugin._current_ws, text=death_msg),
                     self.plugin._loop
                 )
                 

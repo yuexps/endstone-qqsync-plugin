@@ -7,7 +7,7 @@ import json
 import time
 import re
 import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 from endstone import ColorFormat
 from ..utils.time_utils import TimeUtils
 
@@ -39,6 +39,17 @@ async def send_group_msg(ws, group_id: int, text: str):
     except Exception as e:
         if _plugin_instance:
             _plugin_instance.logger.error(f"发送群消息失败: {e}")
+
+
+async def send_group_msg_to_all_groups(ws, text: str):
+    """向所有配置的群组发送消息"""
+    try:
+        target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        for group_id in target_groups:
+            await send_group_msg(ws, group_id, text)
+    except Exception as e:
+        if _plugin_instance:
+            _plugin_instance.logger.error(f"向所有群组发送消息失败: {e}")
 
 
 async def send_group_msg_with_at(ws, group_id: int, user_id: int, text: str):
@@ -191,6 +202,17 @@ async def set_group_card(ws, group_id: int, user_id: int, card: str):
         raise e
 
 
+async def set_group_card_in_all_groups(ws, user_id: int, card: str):
+    """在所有配置的群组中设置群昵称"""
+    try:
+        target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        for group_id in target_groups:
+            await set_group_card(ws, group_id, user_id, card)
+    except Exception as e:
+        if _plugin_instance:
+            _plugin_instance.logger.error(f"在所有群组中设置群昵称失败: {e}")
+
+
 async def get_group_member_list(ws, group_id: int):
     """获取群成员列表 - OneBot V11 API"""
     try:
@@ -207,6 +229,17 @@ async def get_group_member_list(ws, group_id: int):
     except Exception as e:
         if _plugin_instance:
             _plugin_instance.logger.error(f"获取群成员列表失败: {e}")
+
+
+async def get_all_groups_member_list(ws):
+    """获取所有配置群组的成员列表"""
+    try:
+        target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        for group_id in target_groups:
+            await get_group_member_list(ws, group_id)
+    except Exception as e:
+        if _plugin_instance:
+            _plugin_instance.logger.error(f"获取所有群组成员列表失败: {e}")
 
 
 async def handle_message(ws, data: dict):
@@ -227,8 +260,8 @@ async def handle_message(ws, data: dict):
             return
         
         # 先检查是否是目标群组，避免不必要的数据库查询
-        target_group = _plugin_instance.config_manager.get_config("target_group")
-        if group_id != target_group:
+        target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        if group_id not in target_groups:
             return
         
         # 检查用户是否已绑定QQ，如果已绑定则使用玩家游戏ID
@@ -320,8 +353,10 @@ async def _handle_verification_code(user_id: int, code: str, display_name: str):
         else:
             # 验证失败，发送错误消息到群
             if _plugin_instance._current_ws:
-                await send_group_msg(_plugin_instance._current_ws, group_id=_plugin_instance.config_manager.get_config("target_group"), 
-                                   text=f"@{display_name} {message}")
+                target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+                for group_id in target_groups:
+                    await send_group_msg(_plugin_instance._current_ws, group_id=group_id, 
+                                       text=f"@{display_name} {message}")
             
     except Exception as e:
         if _plugin_instance:
@@ -657,9 +692,13 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 except Exception as e:
                     reply = f"❌ 命令执行失败: {str(e)}"
             
-            elif cmd == "who" and len(args) == 1:
+            elif cmd == "who" and len(args) >= 1:
                 # 查询玩家信息
-                search_input = args[0]
+                # 修复包含空格的玩家名处理问题
+                search_input = " ".join(args)
+                # 处理带双引号的玩家名
+                if search_input.startswith('"') and search_input.endswith('"') and len(search_input) >= 2:
+                    search_input = search_input[1:-1]
                 target_player = None
                 player_data = None
                 
@@ -929,11 +968,21 @@ async def _forward_message_to_game(message_data: dict, display_name: str):
         # 使用新的消息解析工具来处理消息
         from ..utils.message_utils import parse_qq_message, clean_message_text, truncate_message
         
+        # 获取群组ID和名称
+        group_id = message_data.get("group_id")
+        group_name = ""
+        if _plugin_instance and group_id:
+            group_names = _plugin_instance.config_manager.get_config("group_names", {})
+            group_name = group_names.get(str(group_id), "")
+        
         # 解析QQ消息，处理emoji和CQ码
         parsed_message = parse_qq_message(message_data)
         
-        # 构建完整的格式化消息
-        formatted_message = f"{display_name}: {parsed_message}"
+        # 构建完整的格式化消息，如果配置了群组名称则添加前缀
+        if group_name:
+            formatted_message = f"[{group_name}] {display_name}: {parsed_message}"
+        else:
+            formatted_message = f"{display_name}: {parsed_message}"
         
         # 清理文本并限制长度
         clean_message = clean_message_text(formatted_message)
@@ -1046,8 +1095,11 @@ async def handle_api_response(data: dict):
                 if user_id:
                     group_members.add(user_id)
             
-            _plugin_instance.group_members = group_members
-            _plugin_instance.logger.info(f"已更新群成员列表，共 {len(group_members)} 人")
+            # 如果插件实例中有群成员集合，则更新它
+            if hasattr(_plugin_instance, 'group_members'):
+                _plugin_instance.group_members.update(group_members)
+            
+            _plugin_instance.logger.info(f"已更新群成员列表，新增 {len(group_members)} 人")
         
         elif action == "get_stranger_info" and status == "ok" and retcode == 0 and response_data:
             # 用户信息查询成功，更新昵称
@@ -1096,8 +1148,8 @@ async def handle_group_member_change(data: dict):
         user_id = str(data.get("user_id", ""))
         group_id = data.get("group_id")
         
-        target_group = _plugin_instance.config_manager.get_config("target_group")
-        if group_id != target_group:
+        target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        if group_id not in target_groups:
             return
         
         if notice_type == "group_increase":

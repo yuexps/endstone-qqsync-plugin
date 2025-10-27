@@ -514,20 +514,23 @@ class VerificationManager:
                 
                 success_message = f"\n🎉 已完成QQ绑定验证\n玩家ID：{player_name}\nQQ号：{qq_number}{nickname_info}"
                 
-                # 发送@播报消息
-                payload = {
-                    "action": "send_group_msg",
-                    "params": {
-                        "group_id": self.plugin.config_manager.get_config("target_group"),
-                        "message": [
-                            {"type": "at", "data": {"qq": qq_number}},
-                            {"type": "text", "data": {"text": f" {success_message}"}}
-                        ]
-                    },
-                    "echo": f"bind_success_msg_{int(TimeUtils.get_timestamp())}"
-                }
+                # 发送@播报消息到所有群组
+                target_groups = self.plugin.config_manager.get_config("target_groups", [])
+                for group_id in target_groups:
+                    payload = {
+                        "action": "send_group_msg",
+                        "params": {
+                            "group_id": group_id,
+                            "message": [
+                                {"type": "at", "data": {"qq": qq_number}},
+                                {"type": "text", "data": {"text": f" {success_message}"}}
+                            ]
+                        },
+                        "echo": f"bind_success_msg_{int(TimeUtils.get_timestamp())}_{group_id}"
+                    }
+                    
+                    await self.plugin._current_ws.send(json.dumps(payload))
                 
-                await self.plugin._current_ws.send(json.dumps(payload))
                 self.logger.info(f"已发送绑定成功播报: 玩家 {player_name} (QQ: {qq_number})")
             
         except Exception as e:
@@ -545,23 +548,25 @@ class VerificationManager:
                 self.logger.warning(f"❌ 无法设置群昵称: WebSocket 连接不可用")
                 return
             
-            target_group = self.plugin.config_manager.get_config("target_group")
-            if not target_group:
+            target_groups = self.plugin.config_manager.get_config("target_groups", [])
+            if not target_groups:
                 self.logger.warning(f"❌ 无法设置群昵称: 未配置目标群组")
                 return
             
             # 构建设置群昵称的payload
-            payload = {
-                "action": "set_group_card",
-                "params": {
-                    "group_id": target_group,
-                    "user_id": int(qq_number),
-                    "card": player_name
-                },
-                "echo": f"set_group_card:{qq_number}:{player_name}"
-            }
+            for group_id in target_groups:
+                payload = {
+                    "action": "set_group_card",
+                    "params": {
+                        "group_id": group_id,
+                        "user_id": int(qq_number),
+                        "card": player_name
+                    },
+                    "echo": f"set_group_card:{qq_number}:{player_name}:{group_id}"
+                }
+                
+                await self.plugin._current_ws.send(json.dumps(payload))
             
-            await self.plugin._current_ws.send(json.dumps(payload))
             self.logger.info(f"📤 已发送设置群昵称请求: QQ {qq_number} -> {player_name}")
             
         except Exception as e:
@@ -584,16 +589,17 @@ class VerificationManager:
         """处理API操作响应"""
         try:
             if echo.startswith("set_group_card:"):
-                # 解析echo: set_group_card:qq_number:player_name
-                parts = echo.split(":", 2)
-                if len(parts) >= 3:
+                # 解析echo: set_group_card:qq_number:player_name:group_id
+                parts = echo.split(":", 3)
+                if len(parts) >= 4:
                     qq_number = parts[1]
                     player_name = parts[2]
+                    group_id = parts[3]
                     
                     if status == "ok":
-                        self.logger.info(f"✅ 群昵称设置成功: QQ {qq_number} -> {player_name}")
+                        self.logger.info(f"✅ 群昵称设置成功: QQ {qq_number} -> {player_name} (群 {group_id})")
                     else:
-                        self.logger.warning(f"❌ 群昵称设置失败: QQ {qq_number} -> {player_name}, 状态: {status}")
+                        self.logger.warning(f"❌ 群昵称设置失败: QQ {qq_number} -> {player_name} (群 {group_id}), 状态: {status}")
                         if data:
                             self.logger.warning(f"错误详情: {data}")
                 else:
@@ -685,21 +691,8 @@ class VerificationManager:
     async def _send_verification_with_retry(self, ws, user_id: int, verification_text: str, player, verification_code: str, attempt: int):
         """异步发送验证码（带重试机制）"""
         try:
-            target_group = self.plugin.config_manager.get_config("target_group")
+            target_groups = self.plugin.config_manager.get_config("target_groups", [])
             qq_str = str(user_id)
-            
-            # 构建验证码消息payload
-            payload = {
-                "action": "send_group_msg",
-                "params": {
-                    "group_id": target_group,
-                    "message": [
-                        {"type": "at", "data": {"qq": qq_str}},
-                        {"type": "text", "data": {"text": f" {verification_text}"}}
-                    ]
-                },
-                "echo": f"verification_msg:{qq_str}"
-            }
             
             # 记录验证码消息等待回调
             self.verification_messages[qq_str] = {
@@ -709,7 +702,22 @@ class VerificationManager:
                 "player_name": player.name
             }
             
-            await ws.send(json.dumps(payload))
+            # 向所有目标群组发送验证码消息
+            for group_id in target_groups:
+                # 构建验证码消息payload
+                payload = {
+                    "action": "send_group_msg",
+                    "params": {
+                        "group_id": group_id,
+                        "message": [
+                            {"type": "at", "data": {"qq": qq_str}},
+                            {"type": "text", "data": {"text": f" {verification_text}"}}
+                        ]
+                    },
+                    "echo": f"verification_msg:{qq_str}:{group_id}"
+                }
+                
+                await ws.send(json.dumps(payload))
             
             self.logger.info(f"验证码已发送给QQ {user_id} (玩家: {player.name})")
             
