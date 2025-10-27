@@ -303,8 +303,17 @@ class PermissionManager:
             player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}解决方案：重新加入QQ群后权限将自动恢复{ColorFormat.RESET}")
             
             # 显示QQ群信息
-            target_group = self.plugin.config_manager.get_config("target_group")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}目标QQ群：{target_group}{ColorFormat.RESET}")
+            target_groups = self.plugin.config_manager.get_config("target_groups", [])
+            group_names = self.plugin.config_manager.get_config("group_names", {})
+            
+            if target_groups:
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}目标QQ群：{ColorFormat.RESET}")
+                for group_id in target_groups:
+                    group_name = group_names.get(str(group_id), "")
+                    if group_name:
+                        player.send_message(f"{ColorFormat.GRAY}  • {group_id} ({group_name}){ColorFormat.RESET}")
+                    else:
+                        player.send_message(f"{ColorFormat.GRAY}  • {group_id}{ColorFormat.RESET}")
     
     def send_ban_notification(self, player, ban_reason: str, ban_by: str, ban_time: int):
         """向被封禁的玩家发送封禁通知"""

@@ -52,19 +52,22 @@ bedrock_server/plugins/qqsync_plugin/config.json
 修改以下配置：
 ```json
 {
-  "napcat_ws": "ws://localhost:3001",     // NapCat WebSocket服务器 地址（正向WS）
+  "napcat_ws": "ws://localhost:3001",     // NapCat WebSocket服务器地址（正向WS）
   "access_token": "",                     // 访问令牌（可选）
-  "target_group": 712523104,             // 目标QQ群号
+  "target_groups": ["712523104"],        // 目标QQ群号列表（支持多个群聊）
+  "group_names": {                       // 群组名称映射（可选，用于区分消息来源）
+    "712523104": "Minecraft交流群"
+  },
   "admins": ["2899659758"],              // 管理员QQ号列表
   "enable_qq_to_game": true,             // QQ消息转发到游戏
   "enable_game_to_qq": true,             // 游戏消息转发到QQ
   "force_bind_qq": true,                 // 强制QQ绑定（启用身份验证系统）
   "sync_group_card": true,               // 自动同步群昵称为玩家名
-  "check_group_member": true,             // 启用退群检测功能
-  //聊天刷屏检测配置
-  "chat_count_limit": 20, // 1分钟内最多发送消息数（-1则不限制）
-  "chat_ban_time": 300,   // 刷屏后禁言时间（秒）
-  "api_qq_enable": false  //QQ消息API(默认关闭)
+  "check_group_member": true,            // 启用退群检测功能
+  // 聊天刷屏检测配置
+  "chat_count_limit": 20,                // 1分钟内最多发送消息数（-1则不限制）
+  "chat_ban_time": 300,                  // 刷屏后禁言时间（秒）
+  "api_qq_enable": false                 // QQ消息API（默认关闭）
 }
 ```
 
