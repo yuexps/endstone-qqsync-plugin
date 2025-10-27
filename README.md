@@ -40,15 +40,14 @@ pip install --upgrade endstone-qqsync-plugin
 
 #### 手动安装（ 从 [Releases](https://github.com/yuexps/endstone-qqsync-plugin/releases "Releases") 或 [Actions](https://github.com/yuexps/endstone-qqsync-plugin/actions "Actions") 下载 ）
 将插件放到 Endstone 服务器插件目录：
-```
-bedrock_server/plugins/endstone_qqsync_plugin-0.0.7-py2.py3-none-any.whl
-```
+
+`~/bedrock_server/plugins/endstone_qqsync_plugin-0.0.7-py2.py3-none-any.whl`
 
 ### 2. 配置
 首次运行自动生成 `config.json`
-```
-bedrock_server/plugins/qqsync_plugin/config.json
-```
+
+`~/bedrock_server/plugins/qqsync_plugin/config.json`
+
 修改以下配置：
 ```json
 {
@@ -249,12 +248,11 @@ services:
 ### 🔐 QQ绑定问题
 **验证码收不到？**
 - 确认QQ号输入正确
-- 检查QQ隐私设置，允许陌生人私聊
 - 确认机器人QQ账号正常在线
 
 **绑定失败？**
 - 检查该QQ是否已被其他玩家绑定
-- 确认QQ号在目标群内（启用退群检测时）
+- 确认QQ号在目标群内
 - 验证码5分钟内有效，请及时输入
 
 **权限问题？**
