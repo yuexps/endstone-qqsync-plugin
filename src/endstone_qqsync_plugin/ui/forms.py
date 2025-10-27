@@ -181,8 +181,22 @@ QQ号: {qq_number}
                 if hasattr(self.plugin, 'group_members') and self.plugin.group_members:
                     if qq_input not in self.plugin.group_members:
                         player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}该QQ号不在目标群内，无法绑定！{ColorFormat.RESET}")
-                        target_group = self.plugin.config_manager.get_config("target_group")
-                        player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}请先加入QQ群：{target_group}{ColorFormat.RESET}")
+                        # 获取所有目标群组
+                        target_groups = self.plugin.config_manager.get_config("target_groups", [])
+                        group_names = self.plugin.config_manager.get_config("group_names", {})
+                        
+                        # 构建群列表消息
+                        if target_groups:
+                            group_list = []
+                            for group_id in target_groups:
+                                group_name = group_names.get(str(group_id), "")
+                                if group_name:
+                                    group_list.append(f"{group_id} ({group_name})")
+                                else:
+                                    group_list.append(str(group_id))
+                            
+                            groups_text = "、".join(group_list)
+                            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}请先加入以下任一QQ群：{groups_text}{ColorFormat.RESET}")
                         return
             
             # 开始获取QQ昵称和验证流程
@@ -264,15 +278,14 @@ QQ号: {qq_number}
                         delay=2
                     )
                 
-                # 设置QQ群昵称
+                # 设置QQ群昵称 - 在所有配置的群组中设置
                 if (hasattr(self.plugin, '_current_ws') and self.plugin._current_ws and 
                     self.plugin.config_manager.get_config("force_bind_qq", True) and 
                     self.plugin.config_manager.get_config("sync_group_card", True)):
                     
-                    from ..websocket.handlers import set_group_card
-                    target_group = self.plugin.config_manager.get_config("target_group")
+                    from ..websocket.handlers import set_group_card_in_all_groups
                     asyncio.run_coroutine_threadsafe(
-                        set_group_card(self.plugin._current_ws, group_id=target_group, user_id=int(pending_info["qq"]), card=player.name),
+                        set_group_card_in_all_groups(self.plugin._current_ws, user_id=int(pending_info["qq"]), card=player.name),
                         self.plugin._loop
                     )
             else:

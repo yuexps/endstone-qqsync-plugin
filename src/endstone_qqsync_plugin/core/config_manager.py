@@ -20,8 +20,8 @@ class ConfigManager:
         self.default_config = {
             "napcat_ws": "ws://127.0.0.1:3001",
             "access_token": "",
-            "target_groups": [712523104],  # 改为支持多个群聊
-            "group_names": {},  # 群组名称映射 {group_id: group_name}
+            "target_groups": ["712523104"],  # 改为支持多个群聊
+            "group_names": {"712523104": "Minecraft交流群"},  # 群组名称映射 {"group_id": "group_name"}
             "admins": ["2899659758"],
             "enable_qq_to_game": True,
             "enable_game_to_qq": True,
