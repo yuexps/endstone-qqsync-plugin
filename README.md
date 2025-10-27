@@ -218,7 +218,7 @@ else:
 
 ## 🐳 Docker
 
-### Docker compose （已内置环境、QQ协议端，根据提示扫码登陆即可）
+### Docker compose （需自行更换可用的SignServer签名服务器）
 ```yaml
 services:
   endstone:
