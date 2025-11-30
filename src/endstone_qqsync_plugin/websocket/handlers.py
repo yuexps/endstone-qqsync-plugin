@@ -10,6 +10,8 @@ import datetime
 from typing import Dict, Any, List
 from endstone import ColorFormat
 from ..utils.time_utils import TimeUtils
+from endstone.command import CommandSenderWrapper
+from endstone.lang import Language,Translatable
 
 
 # 全局变量引用
@@ -682,12 +684,51 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
         # === 管理员命令 ===
         elif is_admin:
             if cmd == "cmd" and len(args) >= 1:
-                # 执行服务器命令
                 command_to_execute = " ".join(args)
-                
+                msg_ret = []
+                error_ret = []
+
                 try:
-                    result = _plugin_instance.server.dispatch_command(_plugin_instance.server.command_sender, command_to_execute)
-                    reply = f"✅ 命令已执行: /{command_to_execute} \n执行结果: {'成功' if result else '失败, 请检查命令语法或权限'}"
+
+                    language = _plugin_instance.server.language
+
+                    def on_message(msg):
+                        if isinstance(msg, str):
+                            msg_ret.append(msg)
+                        else:
+                            try:
+                                translated = language.translate(msg,language.locale)
+                                msg_ret.append(translated)
+                            except Exception as e:
+                                msg_ret.append(f"[消息翻译失败: {e}]")
+
+                    def on_error(err):
+                        if isinstance(err, str):
+                            error_ret.append(err)
+                        else:
+                            try:
+                                translated = language.translate(err)
+                                error_ret.append(translated)
+                            except Exception as e:
+                                error_ret.append(f"[错误翻译失败: {e}]")
+
+                    wrapper = CommandSenderWrapper(
+                        sender=_plugin_instance.server.command_sender,
+                        on_message=on_message,
+                        on_error=on_error
+                    )
+
+                    success = _plugin_instance.server.dispatch_command(wrapper, command_to_execute)
+
+                    # 合并输出
+                    lines = []
+                    lines.extend(msg_ret)
+                    lines.extend([f"[ERROR] {e}" for e in error_ret])
+
+                    output_text = "\n".join(lines) if lines else "无返回值"
+                    status = "成功" if success else "失败, 请检查命令语法或权限"
+
+                    reply = f"✅ 命令已执行: /{command_to_execute}\n状态: {status}\n输出:\n{output_text}"
 
                 except Exception as e:
                     reply = f"❌ 命令执行失败: {str(e)}"
