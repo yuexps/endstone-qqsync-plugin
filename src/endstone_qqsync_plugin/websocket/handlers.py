@@ -12,6 +12,8 @@ from endstone import ColorFormat
 from ..utils.time_utils import TimeUtils
 from endstone.command import CommandSenderWrapper
 from endstone.lang import Language,Translatable
+import queue
+import html
 
 
 # 全局变量引用
@@ -685,10 +687,17 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
         elif is_admin:
             if cmd == "cmd" and len(args) >= 1:
                 command_to_execute = " ".join(args)
+                # 转义HTML字符
+                command_to_execute = html.unescape(command_to_execute)
+                # 返回的信息和状态
                 msg_ret = []
                 error_ret = []
+                success = False
 
                 try:
+
+                    # 创建一个队列来接收主线程的执行结果
+                    result_queue = queue.Queue()
 
                     language = _plugin_instance.server.language
 
@@ -697,7 +706,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                             msg_ret.append(msg)
                         else:
                             try:
-                                translated = language.translate(msg,language.locale)
+                                translated = language.translate(msg, language.locale)
                                 msg_ret.append(translated)
                             except Exception as e:
                                 msg_ret.append(f"[消息翻译失败: {e}]")
@@ -718,7 +727,24 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                         on_error=on_error
                     )
 
-                    success = _plugin_instance.server.dispatch_command(wrapper, command_to_execute)
+                    def server_thread():
+                        try:
+                            # 在主线程中执行命令
+                            success_result = _plugin_instance.server.dispatch_command(wrapper, command_to_execute)
+                            # 将结果放入队列
+                            result_queue.put((success_result, None))
+                        except Exception as e:
+                            # 如果有异常，也放入队列
+                            result_queue.put((False, str(e)))
+
+                    # 提交任务到主线程
+                    _plugin_instance.server.scheduler.run_task(_plugin_instance, server_thread, 0, 0)
+
+                    # 阻塞等待结果
+                    success, error = result_queue.get(block=True, timeout=10)  # 设置10秒超时
+
+                    if error:
+                        raise Exception(error)
 
                     # 合并输出
                     lines = []
@@ -730,6 +756,8 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
 
                     reply = f"✅ 命令已执行: /{command_to_execute}\n状态: {status}\n输出:\n{output_text}"
 
+                except queue.Empty:
+                    reply = "❌ 命令执行超时"
                 except Exception as e:
                     reply = f"❌ 命令执行失败: {str(e)}"
             
