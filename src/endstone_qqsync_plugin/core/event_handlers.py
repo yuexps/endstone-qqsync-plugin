@@ -20,6 +20,7 @@ from endstone.event import (
     ActorDamageEvent,
 )
 from endstone import ColorFormat
+from endstone.lang import Language,Translatable
 
 class EventHandlers:
     """事件处理器"""
@@ -354,12 +355,13 @@ class EventHandlers:
                 from ..websocket.handlers import send_group_msg_to_all_groups
 
                 # 构建死亡消息
-                try:
-                    death_msg = f"💀 {str(event.death_message)}"
-                    # 如果仍然是对象地址，使用默认消息
-                    if 'object at 0x' in death_msg:
-                        death_msg = f"💀 {player_name} 死了"
-                except:
+                language = self.plugin.language.translate
+                if language.locale == "zh_CN":
+                    # 翻译功能有点问题无论如何怎么翻都无法翻出目的语言，服务端没指定语言就用通用亡语
+                    death_msg_to_be_translate = f"💀 {str(event.death_message)}"
+                    language =self.plugin.language.translate
+                    death_msg = language(death_msg_to_be_translate,language.locale)
+                else:
                     death_msg = f"💀 {player_name} 死了"
                 
                 # 发送消息到QQ群
