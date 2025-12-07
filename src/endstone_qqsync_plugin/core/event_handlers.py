@@ -355,11 +355,10 @@ class EventHandlers:
                 from ..websocket.handlers import send_group_msg_to_all_groups
 
                 # 构建死亡消息
-                language = self.plugin.language.translate
+                language = self.plugin.server.language.translate
                 if language.locale == "zh_CN":
                     # 翻译功能有点问题无论如何怎么翻都无法翻出目的语言，服务端没指定语言就用通用亡语
                     death_msg_to_be_translate = f"💀 {str(event.death_message)}"
-                    language =self.plugin.language.translate
                     death_msg = language(death_msg_to_be_translate,language.locale)
                 else:
                     death_msg = f"💀 {player_name} 死了"
