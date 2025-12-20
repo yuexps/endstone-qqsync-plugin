@@ -49,6 +49,8 @@ async def send_group_msg_to_all_groups(ws, text: str):
     """向所有配置的群组发送消息"""
     try:
         target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        # 添加类型转换，确保group_id为整数类型
+        target_groups = [int(gid) for gid in target_groups]
         for group_id in target_groups:
             await send_group_msg(ws, group_id, text)
     except Exception as e:
@@ -210,6 +212,8 @@ async def set_group_card_in_all_groups(ws, user_id: int, card: str):
     """在所有配置的群组中设置群昵称"""
     try:
         target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        # 添加类型转换，确保group_id为整数类型
+        target_groups = [int(gid) for gid in target_groups]
         for group_id in target_groups:
             await set_group_card(ws, group_id, user_id, card)
     except Exception as e:
@@ -239,6 +243,8 @@ async def get_all_groups_member_list(ws):
     """获取所有配置群组的成员列表"""
     try:
         target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        # 添加类型转换，确保group_id为整数类型
+        target_groups = [int(gid) for gid in target_groups]
         for group_id in target_groups:
             await get_group_member_list(ws, group_id)
     except Exception as e:
@@ -260,11 +266,17 @@ async def handle_message(ws, data: dict):
         nickname = sender.get("nickname", "未知")
         card = sender.get("card", "")
         
+        # 添加日志记录，确保群聊消息在控制台打印出来
+        if _plugin_instance:
+            _plugin_instance.logger.info(f"[MSG] [群ID: {group_id}] [QQ: {user_id}] [昵称: {card if card else nickname}] - 内容: {raw_message}")
+        
         if not _plugin_instance:
             return
         
         # 先检查是否是目标群组，避免不必要的数据库查询
         target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+        # 确保target_groups中的元素都是整数类型，与group_id保持一致
+        target_groups = [int(gid) for gid in target_groups]
         if group_id not in target_groups:
             return
         
@@ -358,6 +370,8 @@ async def _handle_verification_code(user_id: int, code: str, display_name: str):
             # 验证失败，发送错误消息到群
             if _plugin_instance._current_ws:
                 target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+                # 添加类型转换，确保group_id为整数类型
+                target_groups = [int(gid) for gid in target_groups]
                 for group_id in target_groups:
                     await send_group_msg(_plugin_instance._current_ws, group_id=group_id, 
                                        text=f"@{display_name} {message}")

@@ -516,6 +516,8 @@ class VerificationManager:
                 
                 # 发送@播报消息到所有群组
                 target_groups = self.plugin.config_manager.get_config("target_groups", [])
+                # 添加类型转换，确保group_id为整数类型
+                target_groups = [int(gid) for gid in target_groups]
                 for group_id in target_groups:
                     payload = {
                         "action": "send_group_msg",
@@ -552,6 +554,9 @@ class VerificationManager:
             if not target_groups:
                 self.logger.warning(f"❌ 无法设置群昵称: 未配置目标群组")
                 return
+            
+            # 添加类型转换，确保group_id为整数类型
+            target_groups = [int(gid) for gid in target_groups]
             
             # 构建设置群昵称的payload
             for group_id in target_groups:
@@ -692,6 +697,8 @@ class VerificationManager:
         """异步发送验证码（带重试机制）"""
         try:
             target_groups = self.plugin.config_manager.get_config("target_groups", [])
+            # 添加类型转换，确保group_id为整数类型
+            target_groups = [int(gid) for gid in target_groups]
             qq_str = str(user_id)
             
             # 记录验证码消息等待回调
