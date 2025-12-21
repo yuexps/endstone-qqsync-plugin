@@ -266,9 +266,12 @@ async def handle_message(ws, data: dict):
         nickname = sender.get("nickname", "未知")
         card = sender.get("card", "")
         
-        # 添加日志记录，确保群聊消息在控制台打印出来
+        # 只打印监听的群聊消息
         if _plugin_instance:
-            _plugin_instance.logger.info(f"[MSG] [群ID: {group_id}] [QQ: {user_id}] [昵称: {card if card else nickname}] - 内容: {raw_message}")
+            target_groups = _plugin_instance.config_manager.get_config("target_groups", [])
+            target_groups = [int(gid) for gid in target_groups]
+            if group_id in target_groups:
+                _plugin_instance.logger.info(f"[MSG] [群ID: {group_id}] [QQ: {user_id}] [昵称: {card if card else nickname}] - 内容: {raw_message}")
         
         if not _plugin_instance:
             return
