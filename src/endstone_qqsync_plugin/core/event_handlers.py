@@ -310,7 +310,7 @@ class EventHandlers:
                 from ..utils.message_utils import filter_sensitive_content
                 
                 # 过滤敏感内容
-                filtered_message, has_sensitive = filter_sensitive_content(message)
+                filtered_message, has_sensitive = filter_sensitive_content(message, self.plugin.config_manager.get_custom_ban_words())
                 
                 # 获取玩家绑定的QQ号（如果有的话）
                 player_qq = self.plugin.data_manager.get_player_qq(player_name)

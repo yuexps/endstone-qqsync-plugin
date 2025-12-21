@@ -245,20 +245,26 @@ def get_sensitive_words():
     return _decode_sensitive_words()
 
 
-def filter_sensitive_content(text: str) -> tuple:
+def filter_sensitive_content(text: str, custom_ban_words=None) -> tuple:
     """
     过滤敏感内容，用于游戏消息转发到QQ
     
     Args:
+        custom_ban_words: 自定义敏感词
         text (str): 原始文本
         
     Returns:
         tuple: (过滤后的文本, 是否包含敏感内容)
     """
+    if custom_ban_words is None:
+        custom_ban_words = []
     if not text:
         return text, False
     
     sensitive_words = get_sensitive_words()
+    # 合并自定义敏感词
+    if custom_ban_words:
+        sensitive_words.update(custom_ban_words)
     original_text = text
     has_sensitive = False
     

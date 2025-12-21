@@ -15,6 +15,7 @@ class ConfigManager:
         self.data_folder = data_folder
         self.logger = logger
         self.config_file = data_folder / "config.json"
+        self.custom_ban_words_file = data_folder / "custom_ban_words.txt"
         self._config: Dict[str, Any] = {}
         self._color_format = None  # 延迟加载ColorFormat
         self.default_config = {
@@ -33,6 +34,7 @@ class ConfigManager:
             "api_qq_enable": False
         }
         self._init_config()
+        self._init_custom_ban_words()
     
     @property
     def color_format(self):
@@ -92,6 +94,31 @@ class ConfigManager:
             self.save_config()
         
         self._log_config_info()
+
+    def _init_custom_ban_words(self):
+        """初始化自定义封禁词列表"""
+        self.custom_ban_words = []
+        
+        # 如果自定义封禁词文件不存在，创建默认文件
+        if not self.custom_ban_words_file.exists():
+            default_ban_words = [
+                "这是一个自定义违禁词",
+                "这是另一个自定义违禁词"
+            ]
+            self.custom_ban_words_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.custom_ban_words_file, 'w', encoding='utf-8') as f:
+                for word in default_ban_words:
+                    f.write(word + '\n')
+            self.logger.info(f"已创建默认自定义封禁词文件: {self.custom_ban_words_file}")
+        
+        # 读取自定义封禁词
+        try:
+            with open(self.custom_ban_words_file, 'r', encoding='utf-8') as f:
+                self.custom_ban_words = [line.strip() for line in f.readlines() if line.strip()]
+            self.logger.info(f"已加载 {len(self.custom_ban_words)} 个自定义封禁词")
+        except Exception as e:
+            self.logger.error(f"读取自定义封禁词文件失败: {e}")
+            self.custom_ban_words = []
     
     def _get_help_commands(self, include_bind: bool = True, include_admin: bool = False, mark_sections: bool = False) -> str:
         """获取帮助命令文本的通用方法"""
@@ -246,6 +273,9 @@ class ConfigManager:
             if config_updated:
                 self.save_config()
             
+            # 重新加载自定义封禁词列表
+            self._init_custom_ban_words()
+            
             ColorFormat = self.color_format
             reload_msg = f"{ColorFormat.GREEN}配置已重新加载{ColorFormat.RESET}"
             self.logger.info(reload_msg)
@@ -253,6 +283,10 @@ class ConfigManager:
         except Exception as e:
             self.logger.error(f"重新加载配置失败: {e}")
             return False
+    
+    def get_custom_ban_words(self) -> List[str]:
+        """获取自定义封禁词列表"""
+        return self.custom_ban_words.copy()
     
     @property
     def config(self) -> Dict[str, Any]:
