@@ -651,7 +651,7 @@ class VerificationManager:
                         self._send_verification_with_retry(
                             self.plugin._current_ws, 
                             int(qq_number), 
-                            f"\n玩家ID：{player.name}\n🔐 QQ绑定验证码：{verification_code}\n⏰ 验证码60秒内有效\n💡 请在游戏中输入此验证码完成绑定\n📝 或直接在群内发送 /verify {verification_code}", 
+                            f"\n验证码：{verification_code}\n玩家ID：{player.name}\n⏰ 验证码60秒内有效\n💡 请在游戏中输入此验证码完成绑定\n📝 或直接在群内发送 /verify {verification_code}",
                             player, 
                             verification_code, 
                             attempt
