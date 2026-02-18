@@ -241,7 +241,6 @@ def _decode_sensitive_words():
 
 def get_sensitive_words():
     """获取敏感词集合"""
-    # 从加密数据中获取敏感词
     return _decode_sensitive_words()
 
 
@@ -265,7 +264,6 @@ def filter_sensitive_content(text: str, custom_ban_words=None) -> tuple:
     # 合并自定义敏感词
     if custom_ban_words:
         sensitive_words.update(custom_ban_words)
-    original_text = text
     has_sensitive = False
     
     # 检查并替换敏感词

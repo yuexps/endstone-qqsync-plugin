@@ -6,8 +6,6 @@
 import asyncio
 import json
 import random
-import time
-import datetime
 from ..utils.time_utils import TimeUtils
 from typing import Dict, List, Set, Any, Tuple, Optional
 
@@ -170,7 +168,7 @@ class VerificationManager:
             verification_code = str(random.randint(100000, 999999))
             
             # 存储验证信息
-            creation_time = TimeUtils.get_network_time()[0]  # 获取准确的网络时间
+            creation_time = TimeUtils.get_current_time()[0]  # 获取准确的时间
             self.pending_verifications[player.name] = {
                 "qq": qq_number,
                 "code": verification_code,
@@ -510,7 +508,7 @@ class VerificationManager:
                 # 检查是否启用了群昵称同步
                 nickname_info = ""
                 if self.plugin.config_manager.get_config("sync_group_card", True):
-                    nickname_info = f"\n🏷️ 群昵称已设置为：{player_name}"
+                    nickname_info = f"\n群昵称已自动设置为：{player_name}"
                 
                 success_message = f"\n🎉 已完成QQ绑定验证\n玩家ID：{player_name}\nQQ号：{qq_number}{nickname_info}"
                 
@@ -581,12 +579,15 @@ class VerificationManager:
         """处理消息发送响应，保存消息ID"""
         try:
             if echo.startswith("verification_msg:"):
-                qq_number = echo.split("verification_msg:")[1]
+                # Echo format: verification_msg:{qq}:{group_id}
+                echo_content = echo.split("verification_msg:")[1]
+                qq_number = echo_content.split(":")[0]  # Extract QQ only
+                
                 if qq_number in self.verification_messages:
                     self.verification_messages[qq_number]["message_id"] = message_id
                     self.logger.info(f"✅ 已保存验证码消息ID: QQ {qq_number}, message_id {message_id}")
                 else:
-                    self.logger.warning(f"❌ 收到验证码消息ID，但找不到对应的QQ记录: {qq_number}")
+                    self.logger.warning(f"❌ 收到验证码消息ID，但找不到对应的QQ记录: {qq_number} (Echo: {echo})")
         except Exception as e:
             self.logger.error(f"处理消息响应失败: {e}")
     
@@ -651,7 +652,7 @@ class VerificationManager:
                         self._send_verification_with_retry(
                             self.plugin._current_ws, 
                             int(qq_number), 
-                            f"\n验证码：{verification_code}\n玩家ID：{player.name}\n⏰ 验证码60秒内有效\n💡 请在游戏中输入此验证码完成绑定\n📝 或直接在群内发送 /verify {verification_code}",
+                            f"\n验证码：{verification_code}\n玩家ID：{player.name}\n💡 请在游戏中输入此验证码完成绑定\n或直接在群内发送 /verify {verification_code}\n验证码60秒内有效！",
                             player, 
                             verification_code, 
                             attempt

@@ -4,14 +4,12 @@ WebSocket消息处理函数
 
 import asyncio
 import json
-import time
-import re
 import datetime
-from typing import Dict, Any, List
 from endstone import ColorFormat
 from ..utils.time_utils import TimeUtils
 from endstone.command import CommandSenderWrapper
 from endstone.lang import Language,Translatable
+from ..utils.helpers import format_playtime
 import queue
 import html
 
@@ -421,8 +419,6 @@ async def _handle_verification_code_with_feedback(ws, user_id: int, code: str, d
             # 绑定成功 - 数据绑定由 data_manager 处理
             _plugin_instance.data_manager.bind_player_qq(player_name, target_player.xuid, qq_str)
             
-            # 注意：验证数据清理、验证码撤回和绑定成功播报已在 verification_manager.verify_code() 中统一处理
-            
             # 通知玩家 - 使用调度器确保在主线程执行
             def notify_player():
                 """在主线程中通知玩家绑定成功"""
@@ -457,6 +453,40 @@ async def _handle_verification_code_with_feedback(ws, user_id: int, code: str, d
             _plugin_instance.logger.error(f"处理/verify命令失败: {e}")
         await send_group_msg(ws, group_id, f"@{display_name} ❌ 验证过程发生错误，请稍后重试")
         return False
+
+
+def _resolve_target(input_str: str):
+    """
+    智能解析目标玩家
+    
+    逻辑：
+    1. 尝试作为QQ号查找绑定的玩家
+    2. 尝试作为玩家名查找已存在的玩家数据
+    
+    返回: (player_name, match_type) 或 (None, None)
+    match_type: "QQ" 或 "Name"
+    """
+    if not _plugin_instance:
+        return None, None
+        
+    # 1. 尝试作为QQ号查找
+    if input_str.isdigit():
+        # 1.1 优先查找当前绑定
+        target = _plugin_instance.data_manager.get_qq_player(input_str)
+        if target:
+            return target, "QQ"
+            
+        # 1.2 尝试查找历史绑定 (用于解封已解绑的玩家)
+        target = _plugin_instance.data_manager.get_qq_player_history(input_str)
+        if target:
+            return target, "QQ (History)"
+    
+    # 2. 尝试作为玩家名查找
+    # 检查是否在数据中有记录
+    if input_str in _plugin_instance.data_manager.binding_data:
+        return input_str, "Name"
+            
+    return None, None
 
 
 async def _handle_group_command(ws, user_id: int, raw_message: str, display_name: str, group_id: int):
@@ -648,10 +678,11 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 
                 # 游戏时长
                 total_playtime = player_data.get("total_playtime", 0)
+                # 游戏时长
+                total_playtime = player_data.get("total_playtime", 0)
                 if total_playtime > 0:
-                    hours = total_playtime // 3600
-                    minutes = (total_playtime % 3600) // 60
-                    reply += f"总游戏时长: {hours}小时{minutes}分钟\n"
+                    playtime_str = format_playtime(total_playtime)
+                    reply += f"总游戏时长: {playtime_str}\n"
                 else:
                     reply += "总游戏时长: 无记录\n"
                 
@@ -788,20 +819,12 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 target_player = None
                 player_data = None
                 
-                if search_input.isdigit():
-                    # 输入的是QQ号
-                    target_player = _plugin_instance.data_manager.get_qq_player(search_input)
-                    if not target_player:
-                        reply = f"❌ 未找到绑定QQ号 {search_input} 的玩家"
-                    else:
-                        player_data = _plugin_instance.data_manager.binding_data.get(target_player, {})
+                target_player, match_type = _resolve_target(search_input)
+                
+                if not target_player:
+                    reply = f"❌ 未找到玩家 {search_input} 的记录"
                 else:
-                    # 输入的是玩家名
-                    target_player = search_input
-                    if target_player not in _plugin_instance.data_manager.binding_data:
-                        reply = f"❌ 玩家 {target_player} 未找到记录"
-                    else:
-                        player_data = _plugin_instance.data_manager.binding_data[target_player]
+                    player_data = _plugin_instance.data_manager.binding_data.get(target_player, {})
                 
                 if target_player and player_data:
                     from ..utils.time_utils import TimeUtils
@@ -846,9 +869,8 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                     # 游戏时长
                     total_playtime = player_data.get("total_playtime", 0)
                     if total_playtime > 0:
-                        hours = total_playtime // 3600
-                        minutes = (total_playtime % 3600) // 60
-                        reply += f"总游戏时长: {hours}小时{minutes}分钟\n"
+                        playtime_str = format_playtime(total_playtime)
+                        reply += f"总游戏时长: {playtime_str}\n"
                     else:
                         reply += "总游戏时长: 无记录\n"
                     
@@ -941,21 +963,34 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
             
             elif cmd == "ban" and len(args) >= 1:
                 # 封禁玩家
-                player_name = args[0]
-                ban_reason = " ".join(args[1:]) if len(args) > 1 else "管理员封禁"
+                search_input = args[0]
+                target_player, match_type = _resolve_target(search_input)
                 
-                if _plugin_instance.data_manager.ban_player(player_name, display_name, ban_reason):
-                    reply = f"✅ 已封禁玩家 {player_name}\n原因: {ban_reason}"
+                if not target_player:
+                    reply = f"❌ 未找到玩家 {search_input} 的记录，无法封禁"
                 else:
-                    reply = f"❌ 封禁失败，玩家 {player_name} 不存在"
+                    player_name = target_player
+                    ban_reason = " ".join(args[1:]) if len(args) > 1 else "管理员封禁"
+                    
+                    if _plugin_instance.data_manager.ban_player(player_name, display_name, ban_reason):
+                        reply = f"✅ 已封禁玩家 {player_name}"
+                        if match_type == "QQ":
+                            reply += f" (通过QQ查找)"
+                        reply += f"\n原因: {ban_reason}"
+                    else:
+                        reply = f"❌ 封禁失败: 未知错误"
             
             elif cmd == "unban" and len(args) == 1:
                 # 解封玩家
-                player_name = args[0]
-                if _plugin_instance.data_manager.unban_player(player_name):
-                    reply = f"✅ 已解封玩家 {player_name}"
+                search_input = args[0]
+                target_player, match_type = _resolve_target(search_input)
+                
+                if not target_player:
+                    reply = f"❌ 未找到玩家 {search_input} 的记录"
+                elif _plugin_instance.data_manager.unban_player(target_player):
+                    reply = f"✅ 已解封玩家 {target_player}"
                 else:
-                    reply = f"❌ 解封失败，玩家 {player_name} 未被封禁或不存在"
+                    reply = f"❌ 解封失败，玩家 {target_player} 未被封禁"
             
             elif cmd == "banlist":
                 # 查看封禁列表
@@ -978,14 +1013,11 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 search_input = args[0]
                 target_player = None
                 
-                if search_input.isdigit():
-                    # 输入的是QQ号
-                    target_player = _plugin_instance.data_manager.get_qq_player(search_input)
-                    if not target_player:
-                        reply = f"❌ 未找到绑定QQ号 {search_input} 的玩家"
-                else:
-                    # 输入的是玩家名
-                    target_player = search_input
+                search_input = args[0]
+                target_player, match_type = _resolve_target(search_input)
+                
+                if not target_player:
+                    reply = f"❌ 未找到匹配的玩家: {search_input}"
                 
                 if target_player and _plugin_instance.data_manager.unbind_player_qq(target_player, display_name):
                     reply = f"✅ 已解绑玩家 {target_player} 的QQ绑定"
@@ -1182,10 +1214,14 @@ async def handle_api_response(data: dict):
                     group_members.add(user_id)
             
             # 如果插件实例中有群成员集合，则更新它
+            added_count = 0
             if hasattr(_plugin_instance, 'group_members'):
+                old_count = len(_plugin_instance.group_members)
                 _plugin_instance.group_members.update(group_members)
+                new_count = len(_plugin_instance.group_members)
+                added_count = new_count - old_count
             
-            _plugin_instance.logger.info(f"已更新群成员列表，新增 {len(group_members)} 人")
+            _plugin_instance.logger.info(f"已更新群成员列表，当前共 {len(_plugin_instance.group_members)} 人 (本次新增 {added_count} 人)")
         
         elif action == "get_stranger_info" and status == "ok" and retcode == 0 and response_data:
             # 用户信息查询成功，更新昵称

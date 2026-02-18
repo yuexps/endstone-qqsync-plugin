@@ -264,8 +264,6 @@ QQ号: {qq_number}
                 # 绑定成功 - 数据绑定由 data_manager 处理
                 self.plugin.data_manager.bind_player_qq(player.name, player.xuid, pending_info["qq"])
                 
-                # 注意：验证数据清理、验证码撤回和成功播报已在 verification_manager.verify_code() 中统一处理
-                
                 # 发送成功消息给玩家
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}[成功] QQ绑定成功！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}您的QQ {pending_info['qq']} 已与游戏账号绑定{ColorFormat.RESET}")

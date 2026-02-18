@@ -5,7 +5,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List
 
 
 class ConfigManager:
@@ -17,12 +17,12 @@ class ConfigManager:
         self.config_file = data_folder / "config.json"
         self.custom_ban_words_file = data_folder / "custom_ban_words.txt"
         self._config: Dict[str, Any] = {}
-        self._color_format = None  # 延迟加载ColorFormat
+        self._color_format = None
         self.default_config = {
             "napcat_ws": "ws://127.0.0.1:3001",
             "access_token": "",
-            "target_groups": ["712523104"],  # 改为支持多个群聊
-            "group_names": {},  # 群组名称映射(可选) {"group_id": "group_name"}，用于在多群场景下区分消息来源
+            "target_groups": ["712523104"],
+            "group_names": {},
             "admins": ["2899659758"],
             "enable_qq_to_game": True,
             "enable_game_to_qq": True,

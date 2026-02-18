@@ -138,8 +138,6 @@ class EventHandlers:
             # 记录玩家加入时间和进服次数（使用join/quit事件记录）
             self.plugin.data_manager.update_player_join(player_name, player_xuid)
             
-            # 注意：在线时长累计现在由独立的计时器系统处理，不再依赖join/quit事件
-            
             # 检查玩家名称是否发生变化（处理改名）
             existing_player = self.plugin.data_manager.get_player_by_xuid(player_xuid)
             if existing_player and existing_player.get("name") != player_name:
@@ -213,8 +211,6 @@ class EventHandlers:
             
             # 记录玩家退出时间（使用join/quit事件记录）
             self.plugin.data_manager.update_player_quit(player_name)
-            
-            # 注意：在线时长累计现在由独立的计时器系统处理，不再依赖join/quit事件
             
             # 清理玩家相关缓存
             self.plugin.permission_manager.cleanup_player_permissions(player_name)
@@ -356,12 +352,8 @@ class EventHandlers:
 
                 # 构建死亡消息
                 language = event.player.server.language
-                if language.locale == "zh_CN":
-                    # 翻译功能有点问题无论如何怎么翻都无法翻出目的语言，服务端没指定语言就用通用亡语
-                    death_msg_to_be_translate = event.death_message
-                    death_msg = language.translate(death_msg_to_be_translate,language.locale)
-                else:
-                    death_msg = f"💀 {player_name} 死了"
+                death_msg_to_be_translate = event.death_message
+                death_msg = language.translate(death_msg_to_be_translate,locale="zh_CN")
                 
                 # 发送消息到QQ群
                 asyncio.run_coroutine_threadsafe(
@@ -472,12 +464,10 @@ class EventHandlers:
             damage_source = event.damage_source
             
             # 只有当伤害来源是玩家时，才进行权限检查
-            # 生物攻击玩家或其他实体时不受此限制
             if hasattr(damage_source, 'actor') and damage_source.actor:
                 damager = damage_source.actor
                 
                 # 检查是否是玩家：只检查玩家特有的属性
-                # 玩家会有 name、xuid 和 has_permission 方法
                 if (hasattr(damager, 'name') and hasattr(damager, 'xuid') and 
                     hasattr(damager, 'has_permission') and callable(getattr(damager, 'has_permission', None))):
                     

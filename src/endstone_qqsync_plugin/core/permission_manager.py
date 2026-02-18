@@ -271,38 +271,53 @@ class PermissionManager:
         """向访客玩家发送权限限制通知"""
         ColorFormat = self.color_format
         
-        if visitor_reason == "已被封禁":
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}[封禁] 您当前为访客权限（原因：已被封禁）{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}以下功能受限：{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法聊天{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法破坏/放置方块{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法使用物品{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法拾取/丢弃物品{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法与容器/机器交互{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法攻击生物或实体{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}如有疑问请联系管理员{ColorFormat.RESET}")
-        elif visitor_reason == "未绑定QQ":
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}[警告] 您当前为访客权限（原因：未绑定QQ）{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}以下功能受限：{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法聊天{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法破坏/放置方块{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法使用物品{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法拾取/丢弃物品{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法与容器/机器交互{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法攻击生物或实体{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}解决方案：使用命令 /bindqq 绑定QQ{ColorFormat.RESET}")
-        elif visitor_reason == "已退出QQ群":
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}[警告] 您当前为访客权限（原因：已退出QQ群）{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}以下功能受限：{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法聊天{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法破坏/放置方块{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法使用物品{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法拾取/丢弃物品{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法与容器/机器交互{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}• 无法攻击生物或实体{ColorFormat.RESET}")
-            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}解决方案：重新加入QQ群后权限将自动恢复{ColorFormat.RESET}")
+        # 定义不同原因对应的显示配置
+        configs = {
+            "已被封禁": {
+                "title": "[封禁]",
+                "title_color": ColorFormat.RED,
+                "solution": "如有疑问请联系管理员",
+                "solution_color": ColorFormat.YELLOW
+            },
+            "未绑定QQ": {
+                "title": "[警告]",
+                "title_color": ColorFormat.YELLOW,
+                "solution": "解决方案：使用命令 /bindqq 绑定QQ",
+                "solution_color": ColorFormat.GREEN
+            },
+            "已退出QQ群": {
+                "title": "[警告]",
+                "title_color": ColorFormat.YELLOW,
+                "solution": "解决方案：重新加入QQ群后权限将自动恢复",
+                "solution_color": ColorFormat.GREEN
+            }
+        }
+        
+        config = configs.get(visitor_reason)
+        if not config:
+            return
+
+        # 1. 发送标题
+        player.send_message(f"{ColorFormat.GRAY}[QQsync] {config['title_color']}{config['title']} 您当前为访客权限（原因：{visitor_reason}）{ColorFormat.RESET}")
+        
+        # 2. 发送公共受限功能列表
+        player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}以下功能受限：{ColorFormat.RESET}")
+        restrictions = [
+            "• 无法聊天",
+            "• 无法破坏/放置方块",
+            "• 无法使用物品",
+            "• 无法拾取/丢弃物品",
+            "• 无法与容器/机器交互",
+            "• 无法攻击生物或实体"
+        ]
+        for item in restrictions:
+            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{item}{ColorFormat.RESET}")
             
-            # 显示QQ群信息
+        # 3. 发送解决方案
+        player.send_message(f"{ColorFormat.GRAY}[QQsync] {config['solution_color']}{config['solution']}{ColorFormat.RESET}")
+        
+        # 4. 如果是退群原因，额外显示QQ群信息
+        if visitor_reason == "已退出QQ群":
             target_groups = self.plugin.config_manager.get_config("target_groups", [])
             group_names = self.plugin.config_manager.get_config("group_names", {})
             

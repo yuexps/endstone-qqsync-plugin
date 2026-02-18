@@ -18,13 +18,12 @@ from .websocket import WebSocketClient
 from .websocket.handlers import set_plugin_instance, send_group_msg_to_all_groups
 from .ui import UIManager
 from .utils.time_utils import TimeUtils
-from .utils.message_utils import parse_qq_message
 
 
 class qqsync(Plugin):
     """QQsync群服互通插件主类"""
 
-    api_version = "0.6"
+    api_version = "0.11"
     
     # 定义命令
     commands = {
@@ -47,17 +46,7 @@ class qqsync(Plugin):
     def on_load(self) -> None:
         self.logger.info(f"{ColorFormat.BLUE}qqsync_plugin {ColorFormat.WHITE}正在加载...{ColorFormat.RESET}")
         
-        # 初始化时间系统
-        self.logger.info(f"{ColorFormat.YELLOW}正在初始化时间系统...{ColorFormat.RESET}")
-        time_init_result = TimeUtils.initialize_time_system()
-        
-        if time_init_result.get('success', True):
-            if not time_init_result.get('local_time_accurate', True):
-                self.logger.info(f"{ColorFormat.YELLOW}⚠️ 本地时间不准确，将使用网络时间同步{ColorFormat.RESET}")
-        else:
-            self.logger.warning(f"{ColorFormat.RED}⚠️ 时间系统初始化失败，使用默认本地时间{ColorFormat.RESET}")
-            
-        self.logger.info(f"{ColorFormat.BLUE}时间系统初始化完成{ColorFormat.RESET}")
+
 
     def on_enable(self) -> None:
         """插件启用"""
@@ -81,7 +70,7 @@ class qqsync(Plugin):
             set_plugin_instance(self)
 
             # 启动消息
-            startup_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已启用 (重构版本){ColorFormat.RESET}"
+            startup_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已启用{ColorFormat.RESET}"
             self.logger.info(startup_msg)
             welcome_msg = f"{ColorFormat.BLUE}欢迎使用QQsync群服互通插件，{ColorFormat.YELLOW}作者：yuexps{ColorFormat.RESET}"
             self.logger.info(welcome_msg)

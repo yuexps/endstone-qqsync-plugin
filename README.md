@@ -271,12 +271,12 @@ services:
 
 **访客权限过严？**
 - 这是安全保护机制，确保服务器安全
-- 可在配置中关闭 `force_bind_qq` 禁用强制绑定)
+- 可在配置中关闭 `force_bind_qq` 禁用强制绑定
 
 ## �️ 故障排除
 
 **无法加载？**
-- ~检查 websockets 是否安装 `pip install websockets`~ (已内置）
+- ~检查 websockets 是否安装 `pip install websockets`~ （已内置）
 - 检查Python 3.11+ 和 Endstone 0.9.4+ 版本
 
 **无法连接？**
