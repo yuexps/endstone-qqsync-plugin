@@ -8,14 +8,40 @@ services:
       - "19132:19132/udp"
     volumes:
       - ./logs:/app/logs:rw
-      - ./lagrange:/app/lagrange:rw
       - ./bedrock_server:/app/endstone/bedrock_server:rw
     environment:
       - TZ=Asia/Shanghai
     stdin_open: true
     tty: true
+    depends_on:
+      - napcat
+    networks:
+      - qqsync-net
     logging:
       driver: json-file
       options:
         max-size: 10m
         max-file: "3"
+
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    restart: always
+    ports:
+      - "6099:6099" # 映射 WebUI 网页管理面板，用于扫码登录 QQ
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./qq-data:/app/.config/QQ          # 保存 QQ 登录凭证，避免重复扫码
+      - ./napcat-config:/app/napcat/config  # 保存 NapCat 的插件及网络配置
+    networks:
+      - qqsync-net
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  qqsync-net:
+    driver: bridge

@@ -137,6 +137,8 @@ class EventHandlers:
             
             # 记录玩家加入时间和进服次数（使用join/quit事件记录）
             self.plugin.data_manager.update_player_join(player_name, player_xuid)
+            # 立即启动玩家在线计时器
+            self.plugin.data_manager.start_player_timer(player_name, player_xuid)
             
             # 检查玩家名称是否发生变化（处理改名）
             existing_player = self.plugin.data_manager.get_player_by_xuid(player_xuid)
@@ -187,9 +189,9 @@ class EventHandlers:
                 session_count = playtime_info.get("session_count", 0)
                 
                 if session_count == 1:
-                    join_msg = f"🌟 玩家 {player_name} 首次进入服务器！"
+                    join_msg = f"[首次加入] 玩家 {player_name} 进入了服务器！"
                 else:
-                    join_msg = f"🟢 玩家 {player_name} 加入游戏 (第{session_count}次游戏)"
+                    join_msg = f"[+] 玩家 {player_name} 加入了游戏 (第{session_count}次游戏)"
                 
                 asyncio.run_coroutine_threadsafe(
                     send_group_msg_to_all_groups(self.plugin._current_ws, text=join_msg),
@@ -209,6 +211,15 @@ class EventHandlers:
             
             self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 离开游戏")
             
+            # 计算本次游戏时长
+            session_time = 0
+            if player_name in self.plugin.data_manager._online_timer_start_times:
+                start_time = self.plugin.data_manager._online_timer_start_times[player_name]
+                session_time = int(time.time()) - start_time
+            
+            # 停止并保存玩家在线计时
+            self.plugin.data_manager.stop_player_timer(player_name)
+            
             # 记录玩家退出时间（使用join/quit事件记录）
             self.plugin.data_manager.update_player_quit(player_name)
             
@@ -227,18 +238,21 @@ class EventHandlers:
                 import asyncio
                 from ..websocket.handlers import send_group_msg_to_all_groups
                 
-                # 获取玩家统计信息
-                playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, [])  # 玩家已离线，传入空列表
-                total_playtime = playtime_info.get("total_playtime", 0)                # 格式化游戏时长
-                hours = total_playtime // 3600
-                minutes = (total_playtime % 3600) // 60
-            
-                if hours > 0:
-                    playtime_str = f"{hours}小时{minutes}分钟"
+                # 格式化本次游戏时长
+                if session_time > 0:
+                    hours = session_time // 3600
+                    minutes = (session_time % 3600) // 60
+                    seconds = session_time % 60
+                    if hours > 0:
+                        playtime_str = f"{hours}小时{minutes}分钟"
+                    elif minutes > 0:
+                        playtime_str = f"{minutes}分钟"
+                    else:
+                        playtime_str = f"{seconds}秒"
                 else:
-                    playtime_str = f"{minutes}分钟"
+                    playtime_str = "不足1分钟"
             
-                quit_msg = f"🔴 玩家 {player_name} 离开游戏 (总游戏时长: {playtime_str})"
+                quit_msg = f"[-] 玩家 {player_name} 离开了游戏 (本次游戏时长: {playtime_str})"
             
                 asyncio.run_coroutine_threadsafe(
                     send_group_msg_to_all_groups(self.plugin._current_ws, text=quit_msg),
@@ -312,7 +326,7 @@ class EventHandlers:
                 player_qq = self.plugin.data_manager.get_player_qq(player_name)
                 
                 # 构建聊天消息
-                chat_msg = f"💬 {player_name}: {filtered_message}"
+                chat_msg = f"{player_name}: {filtered_message}"
                 
                 # 如果包含敏感内容，记录日志
                 if has_sensitive:
@@ -424,7 +438,7 @@ class EventHandlers:
                 event.is_cancelled = True
                 
                 # 发送提示消息
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定QQ后才能进行该操作！{ColorFormat.RESET}")
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您当前为访客权限，核心游戏操作（交互/破坏/放置/战斗等）已受限！{ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请使用 /bindqq 命令进行QQ绑定{ColorFormat.RESET}")
                 return
                 

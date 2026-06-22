@@ -478,17 +478,17 @@ class VerificationManager:
                         "echo": f"delete_msg_{int(TimeUtils.get_timestamp())}"
                     }
                     await self.plugin._current_ws.send(json.dumps(payload))
-                    self.logger.info(f"✅ 已发送撤回请求: QQ {qq_number}, message_id: {message_id}")
+                    self.logger.info(f"已发送撤回请求: QQ {qq_number}, message_id: {message_id}")
                 else:
                     if not message_id:
-                        self.logger.warning(f"❌ 无法撤回QQ {qq_number} 的验证码消息: message_id 为空")
+                        self.logger.warning(f"无法撤回QQ {qq_number} 的验证码消息: message_id 为空")
                     elif not hasattr(self.plugin, '_current_ws') or not self.plugin._current_ws:
-                        self.logger.warning(f"❌ 无法撤回QQ {qq_number} 的验证码消息: WebSocket 连接不可用")
+                        self.logger.warning(f"无法撤回QQ {qq_number} 的验证码消息: WebSocket 连接不可用")
                 
                 # 清理记录
                 del self.verification_messages[qq_number]
             else:
-                self.logger.warning(f"❌ 未找到QQ {qq_number} 的验证码消息记录，无法撤回")
+                self.logger.warning(f"未找到QQ {qq_number} 的验证码消息记录，无法撤回")
                 
         except Exception as e:
             self.logger.error(f"删除验证码消息失败: {e}")
@@ -510,7 +510,7 @@ class VerificationManager:
                 if self.plugin.config_manager.get_config("sync_group_card", True):
                     nickname_info = f"\n群昵称已自动设置为：{player_name}"
                 
-                success_message = f"\n🎉 已完成QQ绑定验证\n玩家ID：{player_name}\nQQ号：{qq_number}{nickname_info}"
+                success_message = f"\n[成功] 已完成QQ绑定验证\n玩家ID：{player_name}\nQQ号：{qq_number}{nickname_info}"
                 
                 # 发送@播报消息到所有群组
                 target_groups = self.plugin.config_manager.get_config("target_groups", [])
@@ -545,12 +545,12 @@ class VerificationManager:
                 return
             
             if not hasattr(self.plugin, '_current_ws') or not self.plugin._current_ws:
-                self.logger.warning(f"❌ 无法设置群昵称: WebSocket 连接不可用")
+                self.logger.warning(f"无法设置群昵称: WebSocket 连接不可用")
                 return
             
             target_groups = self.plugin.config_manager.get_config("target_groups", [])
             if not target_groups:
-                self.logger.warning(f"❌ 无法设置群昵称: 未配置目标群组")
+                self.logger.warning(f"无法设置群昵称: 未配置目标群组")
                 return
             
             # 添加类型转换，确保group_id为整数类型
@@ -570,10 +570,10 @@ class VerificationManager:
                 
                 await self.plugin._current_ws.send(json.dumps(payload))
             
-            self.logger.info(f"📤 已发送设置群昵称请求: QQ {qq_number} -> {player_name}")
+            self.logger.info(f"已发送设置群昵称请求: QQ {qq_number} -> {player_name}")
             
         except Exception as e:
-            self.logger.error(f"❌ 设置群昵称失败: {e}")
+            self.logger.error(f"设置群昵称失败: {e}")
     
     def handle_message_response(self, echo: str, message_id: int):
         """处理消息发送响应，保存消息ID"""
@@ -585,9 +585,9 @@ class VerificationManager:
                 
                 if qq_number in self.verification_messages:
                     self.verification_messages[qq_number]["message_id"] = message_id
-                    self.logger.info(f"✅ 已保存验证码消息ID: QQ {qq_number}, message_id {message_id}")
+                    self.logger.info(f"已保存验证码消息ID: QQ {qq_number}, message_id {message_id}")
                 else:
-                    self.logger.warning(f"❌ 收到验证码消息ID，但找不到对应的QQ记录: {qq_number} (Echo: {echo})")
+                    self.logger.warning(f"收到验证码消息ID，但找不到对应的QQ记录: {qq_number} (Echo: {echo})")
         except Exception as e:
             self.logger.error(f"处理消息响应失败: {e}")
     
@@ -603,13 +603,13 @@ class VerificationManager:
                     group_id = parts[3]
                     
                     if status == "ok":
-                        self.logger.info(f"✅ 群昵称设置成功: QQ {qq_number} -> {player_name} (群 {group_id})")
+                        self.logger.info(f"群昵称设置成功: QQ {qq_number} -> {player_name} (群 {group_id})")
                     else:
-                        self.logger.warning(f"❌ 群昵称设置失败: QQ {qq_number} -> {player_name} (群 {group_id}), 状态: {status}")
+                        self.logger.warning(f"群昵称设置失败: QQ {qq_number} -> {player_name} (群 {group_id}), 状态: {status}")
                         if data:
                             self.logger.warning(f"错误详情: {data}")
                 else:
-                    self.logger.warning(f"❌ 解析set_group_card响应echo失败: {echo}")
+                    self.logger.warning(f"解析set_group_card响应echo失败: {echo}")
         except Exception as e:
             self.logger.error(f"处理API响应失败: {e}")
     
@@ -652,7 +652,7 @@ class VerificationManager:
                         self._send_verification_with_retry(
                             self.plugin._current_ws, 
                             int(qq_number), 
-                            f"\n验证码：{verification_code}\n玩家ID：{player.name}\n💡 请在游戏中输入此验证码完成绑定\n或直接在群内发送 /verify {verification_code}\n验证码60秒内有效！",
+                            f"\n验证码：{verification_code}\n玩家ID：{player.name}\n[提示] 请在游戏中输入此验证码完成绑定\n或直接在群内发送 /verify {verification_code}\n验证码60秒内有效！",
                             player, 
                             verification_code, 
                             attempt

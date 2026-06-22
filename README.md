@@ -220,7 +220,7 @@ else:
 
 ## 🐳 Docker
 
-### Docker compose （需自行更换可用的SignServer签名服务器）
+### Docker compose （集成 NapCat 互通示例）
 ```yaml
 services:
   endstone:
@@ -232,18 +232,51 @@ services:
       - "19132:19132/udp"
     volumes:
       - ./logs:/app/logs:rw
-      - ./lagrange:/app/lagrange:rw
       - ./bedrock_server:/app/endstone/bedrock_server:rw
     environment:
       - TZ=Asia/Shanghai
     stdin_open: true
     tty: true
+    depends_on:
+      - napcat
+    networks:
+      - qqsync-net
     logging:
       driver: json-file
       options:
         max-size: 10m
         max-file: "3"
+
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    restart: always
+    ports:
+      - "6099:6099" # 映射 WebUI 网页管理面板，用于扫码登录 QQ
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./qq-data:/app/.config/QQ          # 保存 QQ 登录凭证，避免重复扫码
+      - ./napcat-config:/app/napcat/config  # 保存 NapCat 的插件及网络配置
+    networks:
+      - qqsync-net
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  qqsync-net:
+    driver: bridge
 ```
+
+> [!NOTE]
+> 在此架构中，Endstone 容器和 NapCat 处于同一个名为 `qqsync-net` 的桥接网络中。你只需将插件配置文件 `config.json` 中的连接地址配置为：
+> `"napcat_ws": "ws://napcat:3001"`
+
+
+
 
 ### 🔐 QQ绑定问题
 **验证码收不到？**

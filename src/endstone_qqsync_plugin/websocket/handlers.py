@@ -199,7 +199,7 @@ async def set_group_card(ws, group_id: int, user_id: int, card: str):
             "echo": f"set_group_card_{int(TimeUtils.get_timestamp())}"
         }
         if _plugin_instance:
-            _plugin_instance.logger.info(f"🏷️ 尝试设置群昵称: QQ={user_id}, 群={group_id}, 昵称='{card}'")
+            _plugin_instance.logger.info(f"尝试设置群昵称: QQ={user_id}, 群={group_id}, 昵称='{card}'")
         await ws.send(json.dumps(payload))
     except Exception as e:
         # 让异常向上传播，由调用者(verification_manager)处理日志
@@ -389,14 +389,14 @@ async def _handle_verification_code_with_feedback(ws, user_id: int, code: str, d
         
         # 检查是否是有效的验证码
         if qq_str not in _plugin_instance.verification_manager.verification_codes:
-            await send_group_msg(ws, group_id, f"@{display_name} ❌ 您没有待验证的绑定请求\n💡 请先在游戏中使用 /bindqq 命令申请绑定")
+            await send_group_msg(ws, group_id, f"@{display_name} [错误] 您没有待验证的绑定请求\n[提示] 请先在游戏中使用 /bindqq 命令申请绑定")
             return False
         
         verification_info = _plugin_instance.verification_manager.verification_codes[qq_str]
         player_name = verification_info.get("player_name")
         
         if not player_name:
-            await send_group_msg(ws, group_id, f"@{display_name} ❌ 验证信息异常，请重新申请绑定")
+            await send_group_msg(ws, group_id, f"@{display_name} [错误] 验证信息异常，请重新申请绑定")
             return False
         
         # 查找对应的在线玩家
@@ -407,7 +407,7 @@ async def _handle_verification_code_with_feedback(ws, user_id: int, code: str, d
                 break
         
         if not target_player:
-            await send_group_msg(ws, group_id, f"@{display_name} ❌ 玩家 {player_name} 不在线\n💡 请确保对应的游戏角色在线后再验证")
+            await send_group_msg(ws, group_id, f"@{display_name} [错误] 玩家 {player_name} 不在线\n[提示] 请确保对应的游戏角色在线后再验证")
             return False
         
         # 验证验证码
@@ -445,13 +445,13 @@ async def _handle_verification_code_with_feedback(ws, user_id: int, code: str, d
             return True
         else:
             # 验证失败，发送错误消息到群
-            await send_group_msg(ws, group_id, f"@{display_name} ❌ {message}")
+            await send_group_msg(ws, group_id, f"@{display_name} [错误] {message}")
             return False
             
     except Exception as e:
         if _plugin_instance:
             _plugin_instance.logger.error(f"处理/verify命令失败: {e}")
-        await send_group_msg(ws, group_id, f"@{display_name} ❌ 验证过程发生错误，请稍后重试")
+        await send_group_msg(ws, group_id, f"@{display_name} [错误] 验证过程发生错误，请稍后重试")
         return False
 
 
@@ -516,7 +516,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
         elif cmd == "list":
             online_players = _plugin_instance.server.online_players
             if not online_players:
-                reply = "🎮 当前没有玩家在线"
+                reply = "当前没有玩家在线"
             else:
                 player_list = []
                 for player in online_players:
@@ -534,7 +534,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                     else:
                         player_list.append(f"• {player.name} [未绑定QQ]")
                 
-                reply = f"🎮 在线玩家 ({len(online_players)}/{_plugin_instance.server.max_players}):\n" + "\n".join(player_list)
+                reply = f"在线玩家 ({len(online_players)}/{_plugin_instance.server.max_players}):\n" + "\n".join(player_list)
         
         # /tps 命令 - 查看服务器性能
         elif cmd == "tps":
@@ -546,16 +546,16 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 current_tick_usage = _plugin_instance.server.current_tick_usage
                 average_tick_usage = _plugin_instance.server.average_tick_usage
                 
-                reply = f"📊 服务器性能状态:\n"
+                reply = f"服务器性能状态:\n"
                 reply += f"• 当前TPS: {current_tps:.2f}/20.0"
                 
                 # TPS状态指示
                 if current_tps >= 19.0:
-                    reply += " ✅ 良好\n"
+                    reply += " 良好\n"
                 elif current_tps >= 15.0:
-                    reply += " ⚠️ 轻微延迟\n"
+                    reply += " 轻微延迟\n"
                 else:
-                    reply += " ❌ 严重延迟\n"
+                    reply += " 严重延迟\n"
                 
                 reply += f"• 平均TPS: {average_tps:.2f}/20.0\n"
                 reply += f"• 当前MSPT: {current_mspt:.2f}ms\n"
@@ -564,7 +564,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 reply += f"• 平均Tick使用率: {average_tick_usage:.1f}%"
                 
             except Exception as e:
-                reply = "📊 无法获取服务器性能数据"
+                reply = "无法获取服务器性能数据"
                 if _plugin_instance:
                     _plugin_instance.logger.error(f"获取服务器性能数据失败: {e}")
         
@@ -591,7 +591,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 # 获取系统硬件信息
                 system_info = get_system_info_dict()
                 
-                reply = f"ℹ️ 服务器信息:\n"
+                reply = f"服务器信息:\n"
 
                 # === 服务器基本信息 ===
                 reply += f"• 服务器名称: {server_name}\n"
@@ -604,7 +604,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 reply += f"• 总绑定数: {total_bindings}\n"
                 
                 # === 系统硬件信息 ===
-                reply += f"\n🖥️ 系统信息:\n"
+                reply += f"\n系统信息:\n"
                 reply += f"• 操作系统: {system_info['os']}\n"
                 
                 # CPU信息
@@ -633,19 +633,19 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                             continue
                         reply += f"• 硬盘({disk['device']}): {disk['used_gb']:.1f}GB / {disk['total_gb']:.1f}GB ({disk['percent']:.1f}%)\n"
                 
-                reply += f"\n• QQSync群服互通: 运行中 ✅"
+                reply += f"\n• QQSync群服互通: 运行中"
                 
             except Exception as e:
-                reply = "ℹ️ 无法获取服务器信息"
+                reply = "无法获取服务器信息"
                 if _plugin_instance:
                     _plugin_instance.logger.error(f"获取服务器信息失败: {e}")
                     # 提供基础信息作为回退
                     try:
                         online_count = len(_plugin_instance.server.online_players)
                         max_players = _plugin_instance.server.max_players
-                        reply = f"ℹ️ 服务器基础信息:\n• 在线玩家: {online_count}/{max_players}\n• QQSync: 运行中 ✅"
+                        reply = f"服务器基础信息:\n• 在线玩家: {online_count}/{max_players}\n• QQSync: 运行中"
                     except:
-                        reply = "ℹ️ 服务器信息获取失败"
+                        reply = "服务器信息获取失败"
         
         # /bindqq 命令 - 查看绑定状态
         elif cmd == "bindqq":
@@ -669,12 +669,12 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 
                 # 检查封禁状态
                 if _plugin_instance.data_manager.is_player_banned(bound_player):
-                    reply += "状态: 已封禁 ❌\n"
+                    reply += "状态: 已封禁\n"
                 else:
-                    reply += "状态: 正常 ✅\n"
+                    reply += "状态: 正常\n"
                 
                 # 添加游戏统计信息
-                reply += "\n📊 游戏统计:\n"
+                reply += "\n游戏统计:\n"
                 
                 # 游戏时长
                 total_playtime = player_data.get("total_playtime", 0)
@@ -720,7 +720,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 verification_code = args[0]
                 # 检查验证码格式（6位数字）
                 if not verification_code.isdigit() or len(verification_code) != 6:
-                    reply = f"❌ 验证码格式错误\n💡 请输入6位数字验证码，例如：/verify 123456"
+                    reply = f"[错误] 验证码格式错误\n[提示] 请输入6位数字验证码，例如：/verify 123456"
                 else:
                     result = await _handle_verification_code_with_feedback(ws, user_id, verification_code, display_name, group_id)
                     if result:
@@ -729,7 +729,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                         # 验证失败，不需要设置reply因为函数内已经发送了回复
                         return
             else:
-                reply = f"❌ 命令格式错误\n💡 正确用法：/verify <验证码>\n💡 例如：/verify 123456"
+                reply = f"[错误] 命令格式错误\n[提示] 正确用法：/verify <验证码>\n[提示] 例如：/verify 123456"
         
         # === 管理员命令 ===
         elif is_admin:
@@ -802,12 +802,12 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                     output_text = "\n".join(lines) if lines else "无返回值"
                     status = "成功" if success else "失败, 请检查命令语法或权限"
 
-                    reply = f"✅ 命令已执行: /{command_to_execute}\n状态: {status}\n输出:\n{output_text}"
+                    reply = f"命令已执行: /{command_to_execute}\n状态: {status}\n输出:\n{output_text}"
 
                 except queue.Empty:
-                    reply = "❌ 命令执行超时"
+                    reply = "[错误] 命令执行超时"
                 except Exception as e:
-                    reply = f"❌ 命令执行失败: {str(e)}"
+                    reply = f"[错误] 命令执行失败: {str(e)}"
             
             elif cmd == "who" and len(args) >= 1:
                 # 查询玩家信息
@@ -822,7 +822,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 target_player, match_type = _resolve_target(search_input)
                 
                 if not target_player:
-                    reply = f"❌ 未找到玩家 {search_input} 的记录"
+                    reply = f"[错误] 未找到玩家 {search_input} 的记录"
                 else:
                     player_data = _plugin_instance.data_manager.binding_data.get(target_player, {})
                 
@@ -847,7 +847,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                         ban_time = player_data.get("ban_time", "")
                         ban_by = player_data.get("ban_by", "未知")
                         ban_reason = player_data.get("ban_reason", "无原因")
-                        reply += f"封禁状态: 已封禁 ❌\n"
+                        reply += f"封禁状态: 已封禁\n"
                         
                         # 格式化封禁时间
                         if ban_time:
@@ -861,10 +861,10 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                         reply += f"封禁操作者: {ban_by}\n"
                         reply += f"封禁原因: {ban_reason}\n"
                     else:
-                        reply += "封禁状态: 正常 ✅\n"
+                        reply += "封禁状态: 正常\n"
                     
                     # 添加游戏统计信息
-                    reply += "\n📊 游戏统计:\n"
+                    reply += "\n游戏统计:\n"
                     
                     # 游戏时长
                     total_playtime = player_data.get("total_playtime", 0)
@@ -903,7 +903,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                         reply += "最后退出: 无记录\n"
                     
                     # 绑定历史
-                    reply += "\n🔗 绑定历史:\n"
+                    reply += "\n绑定历史:\n"
                     
                     # 初始绑定时间
                     bind_time = player_data.get("bind_time")
@@ -951,15 +951,15 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                             unban_time_dt = datetime.datetime.fromtimestamp(unban_time)
                             unban_time_str = TimeUtils.format_datetime(unban_time_dt)
                             unban_by = player_data.get("unban_by", "未知")
-                            reply += f"\n🔓 解封历史:\n"
+                            reply += f"\n解封历史:\n"
                             reply += f"解封时间: {unban_time_str}\n"
                             reply += f"解封操作者: {unban_by}"
                         except (ValueError, TypeError):
-                            reply += f"\n🔓 解封时间: 时间格式错误"
+                            reply += f"\n解封时间: 时间格式错误"
                 
                 # 如果没有设置reply且没有找到数据，设置默认错误消息
                 if not reply:
-                    reply = f"❌ 未找到玩家 {search_input} 的数据"
+                    reply = f"[错误] 未找到玩家 {search_input} 的数据"
             
             elif cmd == "ban" and len(args) >= 1:
                 # 封禁玩家
@@ -967,18 +967,18 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 target_player, match_type = _resolve_target(search_input)
                 
                 if not target_player:
-                    reply = f"❌ 未找到玩家 {search_input} 的记录，无法封禁"
+                    reply = f"[错误] 未找到玩家 {search_input} 的记录，无法封禁"
                 else:
                     player_name = target_player
                     ban_reason = " ".join(args[1:]) if len(args) > 1 else "管理员封禁"
                     
                     if _plugin_instance.data_manager.ban_player(player_name, display_name, ban_reason):
-                        reply = f"✅ 已封禁玩家 {player_name}"
+                        reply = f"已封禁玩家 {player_name}"
                         if match_type == "QQ":
                             reply += f" (通过QQ查找)"
                         reply += f"\n原因: {ban_reason}"
                     else:
-                        reply = f"❌ 封禁失败: 未知错误"
+                        reply = f"[错误] 封禁失败: 未知错误"
             
             elif cmd == "unban" and len(args) == 1:
                 # 解封玩家
@@ -986,19 +986,19 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 target_player, match_type = _resolve_target(search_input)
                 
                 if not target_player:
-                    reply = f"❌ 未找到玩家 {search_input} 的记录"
+                    reply = f"[错误] 未找到玩家 {search_input} 的记录"
                 elif _plugin_instance.data_manager.unban_player(target_player):
-                    reply = f"✅ 已解封玩家 {target_player}"
+                    reply = f"已解封玩家 {target_player}"
                 else:
-                    reply = f"❌ 解封失败，玩家 {target_player} 未被封禁"
+                    reply = f"[错误] 解封失败，玩家 {target_player} 未被封禁"
             
             elif cmd == "banlist":
                 # 查看封禁列表
                 banned_players = _plugin_instance.data_manager.get_banned_players()
                 if not banned_players:
-                    reply = "📋 当前没有被封禁的玩家"
+                    reply = "当前没有被封禁的玩家"
                 else:
-                    reply = f"📋 封禁列表 ({len(banned_players)}):\n"
+                    reply = f"封禁列表 ({len(banned_players)}):\n"
                     for banned_info in banned_players[:10]:  # 最多显示10个
                         player_name = banned_info["name"]
                         ban_by = banned_info["ban_by"]
@@ -1017,10 +1017,10 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 target_player, match_type = _resolve_target(search_input)
                 
                 if not target_player:
-                    reply = f"❌ 未找到匹配的玩家: {search_input}"
+                    reply = f"[错误] 未找到匹配的玩家: {search_input}"
                 
                 if target_player and _plugin_instance.data_manager.unbind_player_qq(target_player, display_name):
-                    reply = f"✅ 已解绑玩家 {target_player} 的QQ绑定"
+                    reply = f"已解绑玩家 {target_player} 的QQ绑定"
                     
                     # 如果玩家在线，重新应用权限
                     for player in _plugin_instance.server.online_players:
@@ -1030,7 +1030,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                             _plugin_instance.server.scheduler.run_task(_plugin_instance, apply_permissions, delay=1)
                             break
                 else:
-                    reply = f"❌ 解绑失败，玩家 {target_player} 不存在或未绑定QQ"
+                    reply = f"[错误] 解绑失败，玩家 {target_player} 不存在或未绑定QQ"
             
             elif cmd == "tog_qq":
                 # 切换QQ消息转发
@@ -1039,7 +1039,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 _plugin_instance.config_manager.save_config()
                 
                 status = "启用" if not current_state else "禁用"
-                icon = "✅" if not current_state else "❌"
+                icon = "[已启用]" if not current_state else "[已禁用]"
                 reply = f"{icon} QQ消息转发已{status}"
             
             elif cmd == "tog_game":
@@ -1049,26 +1049,26 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
                 _plugin_instance.config_manager.save_config()
                 
                 status = "启用" if not current_state else "禁用"
-                icon = "✅" if not current_state else "❌"
+                icon = "[已启用]" if not current_state else "[已禁用]"
                 reply = f"{icon} 游戏消息转发已{status}"
             
             elif cmd == "reload":
                 # 重新加载配置
                 try:
                     _plugin_instance.config_manager.reload_config()
-                    reply = "✅ 配置文件已重新加载"
+                    reply = "配置文件已重新加载"
                 except Exception as e:
-                    reply = f"❌ 重新加载配置失败: {str(e)}"
+                    reply = f"[错误] 重新加载配置失败: {str(e)}"
             
             else:
-                reply = f"❓ 未知的管理员命令: /{cmd}\n💡 使用 /help 查看可用命令"
+                reply = f"未知的管理员命令: /{cmd}\n使用 /help 查看可用命令"
         
         else:
             # 非管理员使用管理员命令
             if cmd in ["cmd", "who", "ban", "unban", "banlist", "unbindqq", "tog_qq", "tog_game", "reload"]:
-                reply = "❌ 该命令仅限管理员使用"
+                reply = "[错误] 该命令仅限管理员使用"
             else:
-                reply = f"❓ 未知命令: /{cmd}\n💡 使用 /help 查看可用命令"
+                reply = f"未知命令: /{cmd}\n使用 /help 查看可用命令"
         
         # 发送回复
         if reply:
@@ -1077,7 +1077,7 @@ async def _handle_group_command(ws, user_id: int, raw_message: str, display_name
     except Exception as e:
         if _plugin_instance:
             _plugin_instance.logger.error(f"处理群内命令失败: {e}")
-            await send_group_msg(ws, group_id, f"❌ 命令处理失败: {str(e)}")
+            await send_group_msg(ws, group_id, f"[错误] 命令处理失败: {str(e)}")
 
 
 async def _forward_message_to_game(message_data: dict, display_name: str):
@@ -1190,7 +1190,7 @@ async def handle_api_response(data: dict):
             else:
                 if _plugin_instance:
                     if not message_id:
-                        _plugin_instance.logger.warning(f"❌ send_group_msg响应中缺少message_id: {data}")
+                        _plugin_instance.logger.warning(f"send_group_msg响应中缺少message_id: {data}")
                     elif not echo.startswith("verification_msg:"):
                         _plugin_instance.logger.debug(f"非验证码消息响应: echo={echo}")
         
@@ -1203,7 +1203,7 @@ async def handle_api_response(data: dict):
                     if hasattr(_plugin_instance, 'verification_manager'):
                         _plugin_instance.verification_manager.handle_api_response(echo, "failed", {"retcode": retcode, "message": error_msg})
                 else:
-                    _plugin_instance.logger.warning(f"❌ API请求失败: retcode={retcode}, msg={error_msg}, echo={echo}")
+                    _plugin_instance.logger.warning(f"API请求失败: retcode={retcode}, msg={error_msg}, echo={echo}")
         
         elif action == "get_group_member_list" and status == "ok" and retcode == 0 and response_data:
             # 更新群成员列表
@@ -1229,7 +1229,7 @@ async def handle_api_response(data: dict):
             user_id = str(response_data.get("user_id", ""))
             
             if _plugin_instance:
-                _plugin_instance.logger.info(f"📋 获取QQ用户信息成功: QQ={user_id}, 昵称={nickname}")
+                _plugin_instance.logger.info(f"获取QQ用户信息成功: QQ={user_id}, 昵称={nickname}")
             
             # 查找等待昵称的确认信息
             found = False
@@ -1238,11 +1238,11 @@ async def handle_api_response(data: dict):
                     qq_info["nickname"] = nickname
                     found = True
                     if _plugin_instance:
-                        _plugin_instance.logger.info(f"✅ 已更新玩家 {player_name} 的QQ昵称: {nickname}")
+                        _plugin_instance.logger.info(f"已更新玩家 {player_name} 的QQ昵称: {nickname}")
                     break
             
             if not found and _plugin_instance:
-                _plugin_instance.logger.warning(f"❌ 未找到等待QQ昵称的玩家，QQ号: {user_id}")
+                _plugin_instance.logger.warning(f"未找到等待QQ昵称的玩家，QQ号: {user_id}")
                 _plugin_instance.logger.debug(f"当前等待确认的玩家: {list(_plugin_instance.verification_manager.pending_qq_confirmations.keys())}")
         
         elif action == "get_stranger_info" and status == "ok" and retcode != 0:

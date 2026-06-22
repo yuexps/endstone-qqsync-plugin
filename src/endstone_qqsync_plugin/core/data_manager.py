@@ -13,7 +13,8 @@ from ..utils.time_utils import TimeUtils
 class DataManager:
     """数据管理器"""
     
-    def __init__(self, data_folder: Path, logger):
+    def __init__(self, plugin, data_folder: Path, logger):
+        self.plugin = plugin
         self.data_folder = data_folder
         self.logger = logger
         self.binding_file = data_folder / "data.json"
@@ -115,10 +116,35 @@ class DataManager:
                     pass
     
     def trigger_save(self, reason: str = "数据变更"):
-        """触发数据保存"""
-        if self._auto_save_enabled:
+        """触发数据保存（防抖合并，降低高频写盘 I/O 开销）"""
+        if not self._auto_save_enabled:
+            return
+            
+        # 取消前一次排队的保存动作以实现防抖
+        if hasattr(self, '_save_task') and self._save_task:
+            try:
+                self._save_task.cancel()
+            except Exception:
+                pass
+                
+        def do_save():
+            try:
+                self.save_data()
+                self.logger.info(f"合并数据保存成功: {reason}")
+            except Exception as e:
+                self.logger.error(f"合并数据保存失败: {e}")
+            finally:
+                self._save_task = None
+                
+        try:
+            self._save_task = self.plugin.server.scheduler.run_task(
+                self.plugin,
+                do_save,
+                delay=40 # 2 秒延迟
+            )
+        except Exception as e:
+            self.logger.warning(f"调度延迟存盘失败，回退到同步保存: {e}")
             self.save_data()
-            self.logger.info(f"数据保存: {reason}")
     
     # 玩家绑定相关方法
     def is_player_bound(self, player_name: str, player_xuid: str = None) -> bool:

@@ -363,7 +363,7 @@ QQ号: {qq_number}
                         # 如果昵称已更新且不是默认值，则使用更新后的昵称
                         if updated_nickname != "未知昵称":
                             nickname = updated_nickname
-                            self.logger.info(f"✅ 获取到QQ {qq_number} 昵称: {nickname}")
+                            self.logger.info(f"获取到QQ {qq_number} 昵称: {nickname}")
                             break
                     else:
                         self.logger.warning(f"玩家 {player.name} 的待确认信息已丢失")

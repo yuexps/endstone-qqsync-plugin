@@ -75,18 +75,21 @@ class PermissionManager:
         return ""
     
     def set_player_visitor_permissions(self, player) -> bool:
-        """设置玩家为访客权限（仅限制危险操作，不影响其他插件）"""
+        """设置玩家为访客权限（通过权限组通配符一键限制）"""
         try:
             # 清理现有的此插件权限附件
             self._clear_plugin_attachments(player)
             
-            # 创建访客权限附件 - 采用黑名单模式，只禁止特定危险操作
+            # 创建访客权限附件
             visitor_attachment = player.add_attachment(self.plugin)
             
             # 确保可以使用绑定命令
             visitor_attachment.set_permission("qqsync.command.bindqq", True)
             
-            # 设置专门的权限为false（用于在事件处理器中检查）
+            # 一键激活黑名单继承树（使下属的所有子权限继承为 False）
+            visitor_attachment.set_permission("qqsync.visitor", True)
+            
+            # 设置专门的权限用于事件内部检查
             visitor_attachment.set_permission("qqsync.chat", False)
             visitor_attachment.set_permission("qqsync.destructive", False)
             visitor_attachment.set_permission("qqsync.block_place", False)
@@ -94,79 +97,13 @@ class PermissionManager:
             visitor_attachment.set_permission("qqsync.item_pickup_drop", False)
             visitor_attachment.set_permission("qqsync.combat", False)
             
-            # 定义需要禁止的权限类别
-            restricted_permissions = {
-                # 聊天相关权限
-                'chat': [
-                    "minecraft.command.say", "minecraft.command.tell", "minecraft.command.me",
-                    "minecraft.command.msg", "minecraft.command.w", "minecraft.command.whisper",
-                    "endstone.command.say", "endstone.command.tell", "endstone.command.me"
-                ],
-                # 破坏性操作权限
-                'destructive': [
-                    "minecraft.command.setblock", "minecraft.command.fill", "minecraft.command.clone",
-                    "minecraft.command.give", "minecraft.command.clear", "minecraft.command.kill",
-                    "minecraft.command.summon", "minecraft.command.gamemode", "minecraft.command.tp",
-                    "minecraft.command.teleport", "endstone.command.setblock", "endstone.command.fill",
-                    "endstone.command.give", "endstone.command.clear", "endstone.command.kill",
-                    "endstone.command.gamemode", "endstone.command.tp"
-                ],
-                # 放置方块操作权限
-                'block_place': [
-                    "minecraft.place", "minecraft.place.block", "minecraft.block.place",
-                    "minecraft.build", "minecraft.build.place", "minecraft.world.place",
-                    "endstone.place", "endstone.place.block", "endstone.block.place",
-                    "endstone.build", "endstone.build.place", "endstone.world.place",
-                    "place", "place.block", "block.place", "build", "build.place"
-                ],
-                # 使用物品权限
-                'item_use': [
-                    "minecraft.use", "minecraft.use.item", "minecraft.item.use",
-                    "minecraft.interact", "minecraft.interact.block", "minecraft.interact.item",
-                    "minecraft.rightclick", "minecraft.click", "minecraft.activate",
-                    "endstone.use", "endstone.use.item", "endstone.item.use",
-                    "endstone.interact", "endstone.interact.block", "endstone.interact.item",
-                    "endstone.rightclick", "endstone.click", "endstone.activate",
-                    "use", "use.item", "item.use", "interact", "interact.block",
-                    "interact.item", "rightclick", "click", "activate"
-                ],
-                # 拾取和丢弃权限
-                'item_pickup_drop': [
-                    "minecraft.pickup", "minecraft.pickup.item", "minecraft.item.pickup",
-                    "minecraft.drop", "minecraft.drop.item", "minecraft.item.drop",
-                    "minecraft.collect", "minecraft.collect.item", "minecraft.item.collect",
-                    "minecraft.throw", "minecraft.throw.item", "minecraft.item.throw",
-                    "endstone.pickup", "endstone.pickup.item", "endstone.item.pickup",
-                    "endstone.drop", "endstone.drop.item", "endstone.item.drop",
-                    "endstone.collect", "endstone.collect.item", "endstone.item.collect",
-                    "endstone.throw", "endstone.throw.item", "endstone.item.throw",
-                    "pickup", "pickup.item", "item.pickup", "drop", "drop.item",
-                    "item.drop", "collect", "collect.item", "item.collect",
-                    "throw", "throw.item", "item.throw"
-                ],
-                # 攻击相关权限
-                'combat': [
-                    "minecraft.interact.entity", "minecraft.attack.entity", "minecraft.damage.entity",
-                    "minecraft.hit.entity", "minecraft.pvp", "minecraft.combat", "minecraft.hurt.entity",
-                    "minecraft.kill.entity", "endstone.interact.entity", "endstone.attack.entity",
-                    "endstone.damage.entity", "endstone.hit.entity", "endstone.pvp", "endstone.combat",
-                    "endstone.hurt.entity", "endstone.kill.entity", "attack", "damage", "combat",
-                    "pvp", "entity.attack", "entity.damage", "entity.hurt"
-                ]
-            }
-            
-            # 设置禁止权限
-            for category, permissions in restricted_permissions.items():
-                for perm in permissions:
-                    visitor_attachment.set_permission(perm, False)
-            
             # 存储权限附件以便后续管理
             self.player_attachments[player.name] = visitor_attachment
             
             # 重新计算权限
             player.recalculate_permissions()
             
-            self.logger.info(f"已设置玩家 {player.name} 为访客权限（限制聊天、破坏性操作、放置方块、使用物品、拾取丢弃和攻击行为）")
+            self.logger.info(f"已设置玩家 {player.name} 为访客权限")
             return True
                 
         except Exception as e:
@@ -174,17 +111,17 @@ class PermissionManager:
             return False
     
     def restore_player_permissions(self, player) -> bool:
-        """恢复玩家的正常权限（仅移除访客限制，不影响其他权限）"""
+        """恢复玩家的正常权限（仅解禁访客组，不影响其他权限）"""
         try:
             # 只清理由此插件创建的权限附件，保留其他插件的权限
             self._clear_plugin_attachments(player)
             
-            # 不主动设置权限，让玩家使用服务器默认权限和其他插件权限
-            # 这样可以避免与其他插件的权限管理发生冲突
-            
             # 只确保我们的绑定命令权限存在（以防万一）
             player_attachment = player.add_attachment(self.plugin)
             player_attachment.set_permission("qqsync.command.bindqq", True)
+            
+            # 禁用访客限制组权限继承
+            player_attachment.set_permission("qqsync.visitor", False)
             
             # 确保绑定玩家拥有所有权限
             player_attachment.set_permission("qqsync.chat", True)
@@ -200,7 +137,7 @@ class PermissionManager:
             # 重新计算权限
             player.recalculate_permissions()
             
-            self.logger.info(f"已为玩家 {player.name} 移除访客限制，恢复默认权限")
+            self.logger.info(f"已为玩家 {player.name} 恢复默认游戏权限")
             return True
                 
         except Exception as e:

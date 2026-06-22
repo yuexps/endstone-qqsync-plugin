@@ -58,7 +58,7 @@ class WebSocketClient:
                     self.plugin._current_ws = websocket
                     consecutive_failures = 0  # 重置失败计数
                     
-                    self.logger.info("✅ 已连接 NapCat WS")
+                    self.logger.info("已连接 NapCat WS")
                     
                     # 连接成功后立即获取所有群成员列表
                     try:
@@ -91,11 +91,11 @@ class WebSocketClient:
                 if self._running:
                     # 根据连续失败次数调整重连策略
                     if consecutive_failures <= max_consecutive_failures:
-                        self.logger.warning(f"❌ NapCat WS 连接失败 (尝试{consecutive_failures}/{max_consecutive_failures}): {e}")
+                        self.logger.warning(f"NapCat WS 连接失败 (尝试{consecutive_failures}/{max_consecutive_failures}): {e}")
                         # 指数退避，但最大不超过30秒
                         delay = min(30, delay * 1.5 if consecutive_failures > 1 else 5)
                     else:
-                        self.logger.error(f"❌ NapCat WS 连接持续失败，暂停重连30秒: {e}")
+                        self.logger.error(f"NapCat WS 连接持续失败，暂停重连30秒: {e}")
                         delay = 30  # 持续失败时使用固定延迟
                         consecutive_failures = 0  # 重置计数，给系统恢复机会
                     
@@ -174,11 +174,11 @@ class WebSocketClient:
                     sub_type = data.get("sub_type", "")
                     self_id = data.get("self_id", "")
                     if sub_type == "connect":
-                        self.logger.info(f"✅ OneBot v11 连接确认 (Bot ID: {self_id})")
+                        self.logger.info(f"OneBot v11 连接确认 (Bot ID: {self_id})")
                     elif sub_type == "enable":
-                        self.logger.info(f"✅ OneBot v11 已启用 (Bot ID: {self_id})")
+                        self.logger.info(f"OneBot v11 已启用 (Bot ID: {self_id})")
                     elif sub_type == "disable":
-                        self.logger.warning(f"⚠️ OneBot v11 已禁用 (Bot ID: {self_id})")
+                        self.logger.warning(f"OneBot v11 已禁用 (Bot ID: {self_id})")
                     else:
                         self.logger.info(f"OneBot v11 生命周期事件: {sub_type} (Bot ID: {self_id})")
                 else:
@@ -198,28 +198,23 @@ class WebSocketClient:
         self.logger.info("正在停止 NapCat WS 客户端")
         self._running = False
         
+        # 1. 显式取消处于休眠挂起中的重载/重连主协程
+        if hasattr(self.plugin, '_task') and self.plugin._task:
+            try:
+                self.plugin._task.cancel()
+            except Exception:
+                pass
+                
         if self.ws:
             try:
-                # 检查是否有可用的事件循环
-                loop = None
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    # 没有运行中的事件循环
-                    loop = None
-                
-                if loop and not loop.is_closed():
-                    # 如果有有效的事件循环，使用它来关闭连接
-                    asyncio.create_task(self.ws.close())
+                # 检查子线程的事件循环是否在运行，进行线程安全跨线程关闭投递
+                if hasattr(self.plugin, '_loop') and self.plugin._loop and self.plugin._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(self.ws.close(), self.plugin._loop)
+                    self.logger.info("已提交线程安全的关闭 WebSocket 连接协程任务")
                 else:
-                    # 如果没有事件循环，尝试创建新的来关闭连接
-                    try:
-                        asyncio.run(self.ws.close())
-                    except Exception as close_error:
-                        self.logger.info(f"关闭WebSocket连接时出错（这是正常的）: {close_error}")
-                        
+                    self.logger.warning("子线程事件循环未在运行，将放弃优雅关闭 WebSocket 连接")
             except Exception as e:
-                self.logger.info(f"停止WebSocket客户端时出错（这是正常的）: {e}")
+                self.logger.warning(f"停止WebSocket客户端时出错: {e}")
         
         self.ws = None
         self.plugin._current_ws = None

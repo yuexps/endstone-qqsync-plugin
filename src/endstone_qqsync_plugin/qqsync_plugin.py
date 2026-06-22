@@ -40,6 +40,57 @@ class qqsync(Plugin):
         "qqsync.command.bindqq": {
             "description": "允许使用 /bindqq 命令",
             "default": True
+        },
+        "qqsync.visitor": {
+            "description": "访客权限黑名单组（限制核心行为）",
+            "default": False,
+            "children": {
+                # 聊天相关权限
+                "minecraft.command.say": False, "minecraft.command.tell": False, "minecraft.command.me": False,
+                "minecraft.command.msg": False, "minecraft.command.w": False, "minecraft.command.whisper": False,
+                "endstone.command.say": False, "endstone.command.tell": False, "endstone.command.me": False,
+                # 破坏性操作权限
+                "minecraft.command.setblock": False, "minecraft.command.fill": False, "minecraft.command.clone": False,
+                "minecraft.command.give": False, "minecraft.command.clear": False, "minecraft.command.kill": False,
+                "minecraft.command.summon": False, "minecraft.command.gamemode": False, "minecraft.command.tp": False,
+                "minecraft.command.teleport": False, "endstone.command.setblock": False, "endstone.command.fill": False,
+                "endstone.command.give": False, "endstone.command.clear": False, "endstone.command.kill": False,
+                "endstone.command.gamemode": False, "endstone.command.tp": False,
+                # 放置方块操作权限
+                "minecraft.place": False, "minecraft.place.block": False, "minecraft.block.place": False,
+                "minecraft.build": False, "minecraft.build.place": False, "minecraft.world.place": False,
+                "endstone.place": False, "endstone.place.block": False, "endstone.block.place": False,
+                "endstone.build": False, "endstone.build.place": False, "endstone.world.place": False,
+                "place": False, "place.block": False, "block.place": False, "build": False, "build.place": False,
+                # 使用物品权限
+                "minecraft.use": False, "minecraft.use.item": False, "minecraft.item.use": False,
+                "minecraft.interact": False, "minecraft.interact.block": False, "minecraft.interact.item": False,
+                "minecraft.rightclick": False, "minecraft.click": False, "minecraft.activate": False,
+                "endstone.use": False, "endstone.use.item": False, "endstone.item.use": False,
+                "endstone.interact": False, "endstone.interact.block": False, "endstone.interact.item": False,
+                "endstone.rightclick": False, "endstone.click": False, "endstone.activate": False,
+                "use": False, "use.item": False, "item.use": False, "interact": False, "interact.block": False,
+                "interact.item": False, "rightclick": False, "click": False, "activate": False,
+                # 拾取和丢弃权限
+                "minecraft.pickup": False, "minecraft.pickup.item": False, "minecraft.item.pickup": False,
+                "minecraft.drop": False, "minecraft.drop.item": False, "minecraft.item.drop": False,
+                "minecraft.collect": False, "minecraft.collect.item": False, "minecraft.item.collect": False,
+                "minecraft.throw": False, "minecraft.throw.item": False, "minecraft.item.throw": False,
+                "endstone.pickup": False, "endstone.pickup.item": False, "endstone.item.pickup": False,
+                "endstone.drop": False, "endstone.drop.item": False, "endstone.item.drop": False,
+                "endstone.collect": False, "endstone.collect.item": False, "endstone.item.collect": False,
+                "endstone.throw": False, "endstone.throw.item": False, "endstone.item.throw": False,
+                "pickup": False, "pickup.item": False, "item.pickup": False, "drop": False, "drop.item": False,
+                "item.drop": False, "collect": False, "collect.item": False, "item.collect": False,
+                "throw": False, "throw.item": False, "item.throw": False,
+                # 攻击相关权限
+                "minecraft.interact.entity": False, "minecraft.attack.entity": False, "minecraft.damage.entity": False,
+                "minecraft.hit.entity": False, "minecraft.pvp": False, "minecraft.combat": False, "minecraft.hurt.entity": False,
+                "minecraft.kill.entity": False, "endstone.interact.entity": False, "endstone.attack.entity": False,
+                "endstone.damage.entity": False, "endstone.hit.entity": False, "endstone.pvp": False, "endstone.combat": False,
+                "endstone.hurt.entity": False, "endstone.kill.entity": False, "attack": False, "damage": False, "combat": False,
+                "pvp": False, "entity.attack": False, "entity.damage": False, "entity.hurt": False
+            }
         }
     }
     
@@ -85,7 +136,7 @@ class qqsync(Plugin):
         self.config_manager = ConfigManager(Path(self.data_folder), self.logger)
         
         # 数据管理器
-        self.data_manager = DataManager(Path(self.data_folder), self.logger)
+        self.data_manager = DataManager(self, Path(self.data_folder), self.logger)
         
         # 验证管理器
         self.verification_manager = VerificationManager(self, self.logger)
@@ -320,6 +371,10 @@ class qqsync(Plugin):
     def on_disable(self) -> None:
         """插件禁用"""
         try:
+            # 1. 立即解绑全局插件实例指针，切断消亡期子线程的回调链路
+            from .websocket.handlers import set_plugin_instance
+            set_plugin_instance(None)
+            
             self.logger.info("正在禁用插件...")
             
             # 发送服务器停止消息（在停止WebSocket连接之前）
