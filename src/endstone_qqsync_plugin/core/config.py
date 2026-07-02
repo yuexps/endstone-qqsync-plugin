@@ -274,7 +274,7 @@ class Config:
         admin_commands = [
             "/cmd <命令> — 执行后台控制台命令",
             "/bindqq <游戏名> <QQ> — 强制绑定玩家",
-            "/who <玩家名|QQ> — 查询玩家档案",
+            "/check <玩家名|QQ> — 查询玩家档案",
             "/unbindqq <玩家名|QQ> — 强行解除玩家绑定",
             "/ban <玩家名> [原因] — 封禁玩家",
             "/unban <玩家名> — 解封玩家",

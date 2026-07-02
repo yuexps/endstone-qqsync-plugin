@@ -49,10 +49,10 @@ class GroupCommandHandler:
             "info": (self.cmd_info, False, "查看系统与硬件参数"),
             "bind": (self.cmd_bind, False, "查看QQ绑定状态"),
             "verify": (self.cmd_verify, False, "验证并激活QQ绑定"),
-            "bindqq": (self.cmd_bindqq, True, "强制绑定玩家"),
             # 管理员指令
             "cmd": (self.cmd_cmd, True, "执行后台控制台命令"),
-            "who": (self.cmd_who, True, "查询玩家详细档案"),
+            "check": (self.cmd_check, True, "查询玩家详细档案"),
+            "bindqq": (self.cmd_bindqq, True, "强制绑定玩家"),
             "unbindqq": (self.cmd_unbindqq, True, "强行解除玩家绑定"),
             "ban": (self.cmd_ban, True, "封禁玩家游戏资格"),
             "unban": (self.cmd_unban, True, "解封玩家游戏资格"),
@@ -88,7 +88,7 @@ class GroupCommandHandler:
         is_admin = str(user_id) in self.plugin.config_manager.admins
         if need_admin and not is_admin:
             reply = "[错误] 该命令仅限管理员使用！"
-            await ws_client.send_group_message(group_id, f"@{display_name} {reply}")
+            await ws_client.send_group_message(group_id, f"@{display_name}\n{reply}")
             return
 
         try:
@@ -100,12 +100,12 @@ class GroupCommandHandler:
                     group_id,
                     [
                         {"type": "at", "data": {"qq": str(user_id)}},
-                        {"type": "text", "data": {"text": f" {reply}"}},
+                        {"type": "text", "data": {"text": f"\n{reply}"}},
                     ],
                 )
         except Exception as e:
             self.logger.error(f"群命令 /{cmd_name} 执行失败: {e}")
-            await ws_client.send_group_message(group_id, f"@{display_name} [错误] 指令执行失败: {e}")
+            await ws_client.send_group_message(group_id, f"@{display_name}\n[错误] 指令执行失败: {e}")
 
     # ================= 群指令具体业务处理方法 =================
 
@@ -378,10 +378,10 @@ class GroupCommandHandler:
 
         return None, None
 
-    async def cmd_who(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
-        """/who <角色名|QQ> 命令"""
+    async def cmd_check(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+        """/check <角色名|QQ> 命令"""
         if not args:
-            return "[错误] 用法: /who <玩家游戏名|QQ号>"
+            return "[错误] 用法: /check <玩家游戏名|QQ号>"
 
         search_input = " ".join(args)
         target, match_type = await self._resolve_target(search_input)
