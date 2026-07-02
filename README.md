@@ -14,6 +14,7 @@
 
 * **双向消息同步**：实现游戏内聊天与 QQ 群聊天消息的双向转发。
 * **游戏事件广播**：支持玩家加入、离开、聊天、死亡等事件的自动同步投递。
+* **自定义屏蔽词过滤**：支持自定义屏蔽词过滤，匹配到 `custom_ban_words.txt` 中配置的敏感词会自动用 `*` 替换。
 * **安全身份验证**：提供强制 QQ 绑定机制与防抖验证码系统，防止恶意账号进入。
 * **群成员监控自愈**：自动检测绑定玩家的退群状态，并实时对其进行游戏权限降级保护。
 * **SQLite3 持久存储**：使用本地 SQLite 数据库进行数据管理，防数据冲突。
@@ -35,10 +36,13 @@ pip install --upgrade endstone-qqsync-plugin
 
 ### 2. 配置
 
-首次启动服务器后，插件将在以下路径自动生成默认配置文件：
-`~/bedrock_server/plugins/qqsync_plugin/config.toml`
+首次启动服务器后，插件将在以下路径自动生成默认配置文件及自定义屏蔽词过滤规则：
+* **主配置文件**：`~/bedrock_server/plugins/qqsync_plugin/config.toml`
+* **自定义屏蔽词库**：`~/bedrock_server/plugins/qqsync_plugin/custom_ban_words.txt`
 
-打开并修改 `config.toml` 配置文件，在各字段旁已提供中文注释：
+可以在 `custom_ban_words.txt` 中按行写入自定义屏蔽词，双向转发的聊天消息中若包含这些词，将会被自动用星号 `*` 遮蔽过滤。
+
+打开并修改 `config.toml` 配置文件：
 
 ```toml
 # QQsync 群服互通插件配置文件
@@ -57,12 +61,23 @@ chat_count_limit = 20  # 1分钟内最多发送消息数（-1则不限制）
 chat_ban_time = 300  # 刷屏后禁言时间（秒）
 api_qq_enable = false  # QQ 消息 API（默认关闭）
 
+# 群发消息提示词自定义模板
+msg_first_join = "[首次加入] 欢迎新玩家 {player} 首次进入服务器！"  # 首次加入提示词（支持 {player}）
+msg_join = "[+] {player} 上线了 (第 {sessions} 次登录)"  # 玩家上线提示词（支持 {player}、{sessions}）
+msg_quit = "[-] {player} 下线了 ({time})"  # 玩家下线提示词（支持 {player}、{time}、{total_time}）
+
 # 群组配置表数组（支持配置多群，各群拥有独立的事件和指令开关）
 [[groups]]
 id = 712523104  # 目标 QQ 群号
 name = "主群"  # 群组名称映射（用于区分消息来源）
 enable_chat = true  # 是否开启该群聊天同步
 enable_command = true  # 是否开启该群指令响应
+
+[[groups]]
+id = 987654321  # 目标 QQ 群号（示例副群）
+name = "二群"  # 群组名称映射
+enable_chat = true
+enable_command = false  # 可针对不同群配置独立的指令或聊天开关
 ```
 
 ### 3. 启动

@@ -23,6 +23,11 @@ chat_count_limit = 20  # 1分钟内最多发送消息数（-1则不限制）
 chat_ban_time = 300  # 刷屏后禁言时间（秒）
 api_qq_enable = false  # QQ 消息 API（默认关闭）
 
+# 群发消息提示词自定义模板
+msg_first_join = "[首次加入] 欢迎新玩家 {player} 首次进入服务器！"  # 首次加入提示词（支持 {player}）
+msg_join = "[+] {player} 上线了 (第 {sessions} 次登录)"  # 玩家上线提示词（支持 {player}、{sessions}）
+msg_quit = "[-] {player} 下线了 ({time})"  # 玩家下线提示词（支持 {player}、{time}、{total_time}）
+
 # 群组配置表数组（支持配置多群，各群拥有独立的事件和指令开关）
 [[groups]]
 id = 712523104  # 目标 QQ 群号
@@ -53,6 +58,9 @@ class Config:
         self.chat_count_limit: int = 20
         self.chat_ban_time: int = 300
         self.api_qq_enable: bool = False
+        self.msg_first_join: str = "[首次加入] 欢迎新玩家 {player} 首次进入服务器！"
+        self.msg_join: str = "[+] {player} 上线了 (第 {sessions} 次登录)"
+        self.msg_quit: str = "[-] {player} 下线了 ({time})"
         self.groups: list[dict[str, Any]] = []
 
         self.custom_ban_words: list[str] = []
@@ -167,6 +175,9 @@ class Config:
         self.chat_count_limit = int(data.get("chat_count_limit", self.chat_count_limit))
         self.chat_ban_time = int(data.get("chat_ban_time", self.chat_ban_time))
         self.api_qq_enable = bool(data.get("api_qq_enable", self.api_qq_enable))
+        self.msg_first_join = str(data.get("msg_first_join", self.msg_first_join))
+        self.msg_join = str(data.get("msg_join", self.msg_join))
+        self.msg_quit = str(data.get("msg_quit", self.msg_quit))
 
         # 处理群组表数组
         self.groups = []
@@ -200,7 +211,7 @@ class Config:
             self.ban_words_file.parent.mkdir(parents=True, exist_ok=True)
             try:
                 with open(self.ban_words_file, "w", encoding="utf-8") as f:
-                    f.write("这是一个自定义违禁词\n这是另一个自定义违禁词\n")
+                    f.write("这是一个自定义屏蔽词\n这是另一个自定义屏蔽词\n")
             except Exception as e:
                 self.logger.error(f"创建默认自定义屏蔽词文件失败: {e}")
 
@@ -228,6 +239,10 @@ class Config:
             f"chat_count_limit = {self.chat_count_limit}  # 1分钟内最多发送消息数（-1则不限制）",
             f"chat_ban_time = {self.chat_ban_time}  # 刷屏后禁言时间（秒）",
             f"api_qq_enable = {str(self.api_qq_enable).lower()}  # QQ 消息 API（默认关闭）\n",
+            "# 群发消息提示词自定义模板",
+            f'msg_first_join = "{self.msg_first_join}"  # 首次加入提示词（支持 {{player}}）',
+            f'msg_join = "{self.msg_join}"  # 玩家上线提示词（支持 {{player}}、{{sessions}}）',
+            f'msg_quit = "{self.msg_quit}"  # 玩家下线提示词（支持 {{player}}、{{time}}、{{total_time}}）\n',
             "# 群组配置表数组（支持配置多群，各群拥有独立的事件和指令开关）",
         ]
 

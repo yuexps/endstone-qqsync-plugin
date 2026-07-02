@@ -204,7 +204,7 @@ class SensitiveFilter(MessageMiddleware):
         custom_ban_words = ctx.get("custom_ban_words", [])
         sensitive_words = get_sensitive_words()
 
-        # 扩充自定义违禁词
+        # 扩充自定义屏蔽词
         if custom_ban_words:
             sensitive_words.update(custom_ban_words)
 

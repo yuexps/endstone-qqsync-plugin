@@ -18,13 +18,16 @@ def format_timestamp(timestamp: int | float | None) -> str:
 
 
 def format_playtime(seconds: int) -> str:
-    """将秒数格式化为时分文本"""
+    """将秒数格式化为时分秒文本"""
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
+    remaining_seconds = seconds % 60
 
     if hours > 0:
         return f"{hours}小时{minutes}分钟"
-    return f"{minutes}分钟"
+    if minutes > 0:
+        return f"{minutes}分钟"
+    return f"{remaining_seconds}秒" if remaining_seconds > 0 else "少于1分钟"
 
 
 def is_valid_qq_number(qq: str | None) -> bool:

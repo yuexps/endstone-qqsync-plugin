@@ -5,6 +5,7 @@
 from collections import defaultdict, deque
 import time
 from typing import Any
+from ..utils import format_playtime
 from endstone.event import (
     event_handler,
     PlayerChatEvent,
@@ -166,11 +167,20 @@ class Events:
                 )
                 sessions = playtime_info.get("session_count", 0)
 
-                join_msg = (
-                    f"[首次加入] 欢迎新玩家 {player_name} 首次进入服务器！"
-                    if sessions == 1
-                    else f"[+] 玩家 {player_name} 进入了服务器 (本日第 {sessions} 次登录)"
-                )
+                if sessions == 1:
+                    try:
+                        join_msg = self.plugin.config_manager.msg_first_join.format(player=player_name)
+                    except Exception as ex:
+                        self.logger.warning(f"msg_first_join 模板格式化失败，使用默认值。错误: {ex}")
+                        join_msg = f"[首次加入] 欢迎新玩家 {player_name} 首次进入服务器！"
+                else:
+                    try:
+                        join_msg = self.plugin.config_manager.msg_join.format(
+                            player=player_name, sessions=sessions
+                        )
+                    except Exception as ex:
+                        self.logger.warning(f"msg_join 模板格式化失败，使用默认值。错误: {ex}")
+                        join_msg = f"[+] {player_name} 上线了 (第 {sessions} 次登录)"
 
                 import asyncio
 
@@ -197,6 +207,7 @@ class Events:
                 start_time = self.plugin.data_manager._session_start_times[player_name]
                 session_time = int(time.time()) - start_time
 
+            # 正常执行时长结算落盘（会自动同步更新内存 binding_data）
             self.plugin.data_manager.stop_player_timer(player_name)
             self.plugin.data_manager.update_player_quit(player_name)
 
@@ -208,20 +219,23 @@ class Events:
 
             # 推送退出消息到 QQ 群
             if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
-                if session_time > 0:
-                    hours = session_time // 3600
-                    minutes = (session_time % 3600) // 60
-                    seconds = session_time % 60
-                    if hours > 0:
-                        playtime_str = f"{hours}小时{minutes}分钟"
-                    elif minutes > 0:
-                        playtime_str = f"{minutes}分钟"
-                    else:
-                        playtime_str = f"{seconds}秒"
-                else:
-                    playtime_str = "少于1分钟"
+                # 获取最新被同步的累计游玩时长
+                playtime_info = self.plugin.data_manager.get_player_playtime_info(
+                    player_name, []
+                )
+                total_playtime = playtime_info.get("total_playtime", 0)
 
-                quit_msg = f"[-] 玩家 {player_name} 离开了服务器 (本次在线时长: {playtime_str})"
+                # 统一调用通用辅助函数格式化时长
+                playtime_str = format_playtime(session_time)
+                total_playtime_str = format_playtime(total_playtime)
+
+                try:
+                    quit_msg = self.plugin.config_manager.msg_quit.format(
+                        player=player_name, time=playtime_str, total_time=total_playtime_str
+                    )
+                except Exception as ex:
+                    self.logger.warning(f"msg_quit 模板格式化失败，使用默认值。错误: {ex}")
+                    quit_msg = f"[-] {player_name} 下线了 ({playtime_str})"
 
                 import asyncio
 
@@ -321,8 +335,6 @@ class Events:
                     )
         except Exception as e:
             self.logger.error(f"处理玩家死亡事件转发失败: {e}")
-
-    # ================= 访客游戏行为物理拦截事件 =================
 
     @event_handler
     def on_block_break(self, event: BlockBreakEvent) -> None:
