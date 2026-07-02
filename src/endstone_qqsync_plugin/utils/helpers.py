@@ -1,44 +1,37 @@
 """
-工具函数模块
+通用辅助函数模块
 """
 
 import datetime
-from typing import Any
+from .timing import Timing, CHINA_TZ
 
 
-def format_timestamp(timestamp: int) -> str:
-    """格式化时间戳"""
+def format_timestamp(timestamp: int | float | None) -> str:
+    """格式化秒级时间戳为规范的年月日时分秒"""
+    if not timestamp:
+        return "未知时间"
     try:
-        dt = datetime.datetime.fromtimestamp(timestamp)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
+        dt = datetime.datetime.fromtimestamp(float(timestamp), CHINA_TZ)
+        return Timing.format_datetime(dt)
     except Exception:
         return "未知时间"
 
 
 def format_playtime(seconds: int) -> str:
-    """格式化游戏时长"""
+    """将秒数格式化为时分文本"""
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
-    
+
     if hours > 0:
         return f"{hours}小时{minutes}分钟"
-    else:
-        return f"{minutes}分钟"
+    return f"{minutes}分钟"
 
 
-def is_valid_qq_number(qq: str) -> bool:
-    """检查QQ号是否有效"""
-    return qq and qq.isdigit() and 5 <= len(qq) <= 11
+def is_valid_qq_number(qq: str | None) -> bool:
+    """校验QQ号是否符合5-11位纯数字的规范"""
+    return bool(qq and qq.isdigit() and 5 <= len(qq) <= 11)
 
 
-def clean_player_name(name: str) -> str:
-    """清理玩家名称"""
+def clean_player_name(name: str | None) -> str:
+    """清理并去除玩家游戏ID前后的空白字符"""
     return name.strip() if name else ""
-
-
-def safe_get_config(config_manager, key: str, default: Any = None) -> Any:
-    """安全获取配置项"""
-    try:
-        return config_manager.get_config(key, default)
-    except Exception:
-        return default

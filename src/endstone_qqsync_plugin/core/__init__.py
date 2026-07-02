@@ -1,18 +1,19 @@
 """
-QQsync插件核心模块
+核心业务模块导出
 """
 
-# 核心模块导出
-from .config_manager import ConfigManager
-from .data_manager import DataManager
-from .verification_manager import VerificationManager
-from .permission_manager import PermissionManager
-from .event_handlers import EventHandlers
+from .config import Config
+from .data import Data
+from .permissions import Permissions
+from .ui import UI
+from .verification import Verification
+from .events import Events
 
 __all__ = [
-    "ConfigManager",
-    "DataManager", 
-    "VerificationManager",
-    "PermissionManager",
-    "EventHandlers"
+    "Config",
+    "Data",
+    "Permissions",
+    "UI",
+    "Verification",
+    "Events",
 ]

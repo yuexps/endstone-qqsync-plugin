@@ -1,440 +1,455 @@
-import asyncio
-import threading
-import time
-from pathlib import Path
+"""
+QQsync 群服互通插件主入口文件
+"""
 
+import asyncio
+from pathlib import Path
+import threading
+from typing import Any
 from endstone.plugin import Plugin
 from endstone import ColorFormat
 
-# 导入核心模块
-from .core import (
-    ConfigManager,
-    DataManager, 
-    VerificationManager,
-    PermissionManager,
-    EventHandlers
-)
-from .websocket import WebSocketClient
-from .websocket.handlers import set_plugin_instance, send_group_msg_to_all_groups
-from .ui import UIManager
-from .utils.time_utils import TimeUtils
+# 导入重构后的全新强类型业务组件
+from .core import Config, Data, Permissions, UI, Verification, Events
+from .qq import WebSocketClient, GroupCommandHandler
+from .utils import MessagePipeline
 
 
 class qqsync(Plugin):
     """QQsync群服互通插件主类"""
 
     api_version = "0.11"
-    
-    # 定义命令
+
+    # 注册指令
     commands = {
         "bindqq": {
             "description": "QQ绑定相关命令",
             "usages": ["/bindqq"],
             "aliases": ["qq"],
-            "permissions": ["qqsync.command.bindqq"]
+            "permissions": ["qqsync.command.bindqq"],
         }
     }
-    
-    # 定义权限
+
+    # 注册初始权限节点
     permissions = {
-        "qqsync.command.bindqq": {
-            "description": "允许使用 /bindqq 命令",
-            "default": True
-        },
+        "qqsync.command.bindqq": {"description": "允许使用 /bindqq 命令", "default": True},
         "qqsync.visitor": {
-            "description": "访客权限黑名单组（限制核心行为）",
+            "description": "访客黑名单权限组",
             "default": False,
             "children": {
-                # 聊天相关权限
-                "minecraft.command.say": False, "minecraft.command.tell": False, "minecraft.command.me": False,
-                "minecraft.command.msg": False, "minecraft.command.w": False, "minecraft.command.whisper": False,
-                "endstone.command.say": False, "endstone.command.tell": False, "endstone.command.me": False,
-                # 破坏性操作权限
-                "minecraft.command.setblock": False, "minecraft.command.fill": False, "minecraft.command.clone": False,
-                "minecraft.command.give": False, "minecraft.command.clear": False, "minecraft.command.kill": False,
-                "minecraft.command.summon": False, "minecraft.command.gamemode": False, "minecraft.command.tp": False,
-                "minecraft.command.teleport": False, "endstone.command.setblock": False, "endstone.command.fill": False,
-                "endstone.command.give": False, "endstone.command.clear": False, "endstone.command.kill": False,
-                "endstone.command.gamemode": False, "endstone.command.tp": False,
-                # 放置方块操作权限
-                "minecraft.place": False, "minecraft.place.block": False, "minecraft.block.place": False,
-                "minecraft.build": False, "minecraft.build.place": False, "minecraft.world.place": False,
-                "endstone.place": False, "endstone.place.block": False, "endstone.block.place": False,
-                "endstone.build": False, "endstone.build.place": False, "endstone.world.place": False,
-                "place": False, "place.block": False, "block.place": False, "build": False, "build.place": False,
-                # 使用物品权限
-                "minecraft.use": False, "minecraft.use.item": False, "minecraft.item.use": False,
-                "minecraft.interact": False, "minecraft.interact.block": False, "minecraft.interact.item": False,
-                "minecraft.rightclick": False, "minecraft.click": False, "minecraft.activate": False,
-                "endstone.use": False, "endstone.use.item": False, "endstone.item.use": False,
-                "endstone.interact": False, "endstone.interact.block": False, "endstone.interact.item": False,
-                "endstone.rightclick": False, "endstone.click": False, "endstone.activate": False,
-                "use": False, "use.item": False, "item.use": False, "interact": False, "interact.block": False,
-                "interact.item": False, "rightclick": False, "click": False, "activate": False,
-                # 拾取和丢弃权限
-                "minecraft.pickup": False, "minecraft.pickup.item": False, "minecraft.item.pickup": False,
-                "minecraft.drop": False, "minecraft.drop.item": False, "minecraft.item.drop": False,
-                "minecraft.collect": False, "minecraft.collect.item": False, "minecraft.item.collect": False,
-                "minecraft.throw": False, "minecraft.throw.item": False, "minecraft.item.throw": False,
-                "endstone.pickup": False, "endstone.pickup.item": False, "endstone.item.pickup": False,
-                "endstone.drop": False, "endstone.drop.item": False, "endstone.item.drop": False,
-                "endstone.collect": False, "endstone.collect.item": False, "endstone.item.collect": False,
-                "endstone.throw": False, "endstone.throw.item": False, "endstone.item.throw": False,
-                "pickup": False, "pickup.item": False, "item.pickup": False, "drop": False, "drop.item": False,
-                "item.drop": False, "collect": False, "collect.item": False, "item.collect": False,
-                "throw": False, "throw.item": False, "item.throw": False,
-                # 攻击相关权限
-                "minecraft.interact.entity": False, "minecraft.attack.entity": False, "minecraft.damage.entity": False,
-                "minecraft.hit.entity": False, "minecraft.pvp": False, "minecraft.combat": False, "minecraft.hurt.entity": False,
-                "minecraft.kill.entity": False, "endstone.interact.entity": False, "endstone.attack.entity": False,
-                "endstone.damage.entity": False, "endstone.hit.entity": False, "endstone.pvp": False, "endstone.combat": False,
-                "endstone.hurt.entity": False, "endstone.kill.entity": False, "attack": False, "damage": False, "combat": False,
-                "pvp": False, "entity.attack": False, "entity.damage": False, "entity.hurt": False
-            }
-        }
+                "minecraft.command.say": False,
+                "minecraft.command.tell": False,
+                "minecraft.command.me": False,
+                "minecraft.command.msg": False,
+                "minecraft.command.w": False,
+                "minecraft.command.whisper": False,
+                "endstone.command.say": False,
+                "endstone.command.tell": False,
+                "endstone.command.me": False,
+                "minecraft.command.setblock": False,
+                "minecraft.command.fill": False,
+                "minecraft.command.clone": False,
+                "minecraft.command.give": False,
+                "minecraft.command.clear": False,
+                "minecraft.command.kill": False,
+                "minecraft.command.summon": False,
+                "minecraft.command.gamemode": False,
+                "minecraft.command.tp": False,
+                "minecraft.command.teleport": False,
+                "endstone.command.setblock": False,
+                "endstone.command.fill": False,
+                "endstone.command.give": False,
+                "endstone.command.clear": False,
+                "endstone.command.kill": False,
+                "endstone.command.gamemode": False,
+                "endstone.command.tp": False,
+                "minecraft.place": False,
+                "minecraft.place.block": False,
+                "minecraft.block.place": False,
+                "minecraft.build": False,
+                "minecraft.build.place": False,
+                "minecraft.world.place": False,
+                "endstone.place": False,
+                "endstone.place.block": False,
+                "endstone.block.place": False,
+                "endstone.build": False,
+                "endstone.build.place": False,
+                "endstone.world.place": False,
+                "place": False,
+                "place.block": False,
+                "block.place": False,
+                "build": False,
+                "build.place": False,
+                "minecraft.use": False,
+                "minecraft.use.item": False,
+                "minecraft.item.use": False,
+                "minecraft.interact": False,
+                "minecraft.interact.block": False,
+                "minecraft.interact.item": False,
+                "minecraft.rightclick": False,
+                "minecraft.click": False,
+                "minecraft.activate": False,
+                "endstone.use": False,
+                "endstone.use.item": False,
+                "endstone.item.use": False,
+                "endstone.interact": False,
+                "endstone.interact.block": False,
+                "endstone.interact.item": False,
+                "endstone.rightclick": False,
+                "endstone.click": False,
+                "endstone.activate": False,
+                "use": False,
+                "use.item": False,
+                "item.use": False,
+                "interact": False,
+                "interact.block": False,
+                "interact.item": False,
+                "rightclick": False,
+                "click": False,
+                "activate": False,
+                "minecraft.pickup": False,
+                "minecraft.pickup.item": False,
+                "minecraft.item.pickup": False,
+                "minecraft.drop": False,
+                "minecraft.drop.item": False,
+                "minecraft.item.drop": False,
+                "minecraft.collect": False,
+                "minecraft.collect.item": False,
+                "minecraft.item.collect": False,
+                "minecraft.throw": False,
+                "minecraft.throw.item": False,
+                "minecraft.item.throw": False,
+                "endstone.pickup": False,
+                "endstone.pickup.item": False,
+                "endstone.item.pickup": False,
+                "endstone.drop": False,
+                "endstone.drop.item": False,
+                "endstone.item.drop": False,
+                "endstone.collect": False,
+                "endstone.collect.item": False,
+                "endstone.item.collect": False,
+                "endstone.throw": False,
+                "endstone.throw.item": False,
+                "endstone.item.throw": False,
+                "pickup": False,
+                "pickup.item": False,
+                "item.pickup": False,
+                "drop": False,
+                "drop.item": False,
+                "item.drop": False,
+                "collect": False,
+                "collect.item": False,
+                "item.collect": False,
+                "throw": False,
+                "throw.item": False,
+                "item.throw": False,
+                "minecraft.interact.entity": False,
+                "minecraft.attack.entity": False,
+                "minecraft.damage.entity": False,
+                "minecraft.hit.entity": False,
+                "minecraft.pvp": False,
+                "minecraft.combat": False,
+                "minecraft.hurt.entity": False,
+                "minecraft.kill.entity": False,
+                "endstone.interact.entity": False,
+                "endstone.attack.entity": False,
+                "endstone.damage.entity": False,
+                "endstone.hit.entity": False,
+                "endstone.pvp": False,
+                "endstone.combat": False,
+                "endstone.hurt.entity": False,
+                "endstone.kill.entity": False,
+                "attack": False,
+                "damage": False,
+                "combat": False,
+                "pvp": False,
+                "entity.attack": False,
+                "entity.damage": False,
+                "entity.hurt": False,
+            },
+        },
     }
-    
-    def on_load(self) -> None:
-        self.logger.info(f"{ColorFormat.BLUE}qqsync_plugin {ColorFormat.WHITE}正在加载...{ColorFormat.RESET}")
-        
 
+
+
+    def on_load(self) -> None:
+        self.logger.info(f"{ColorFormat.BLUE}qqsync_plugin {ColorFormat.WHITE}主程序正加载加载中...{ColorFormat.RESET}")
 
     def on_enable(self) -> None:
-        """插件启用"""
+        """插件启用生命周期接口"""
         try:
-            # 初始化管理器
+            # 1. 初始化各业务管理器
             self._init_managers()
-            
-            # 初始化WebSocket相关
-            self._init_websocket()
-            
-            # 设置启动消息标志
-            self._send_startup_message = True
-            
-            # 注册事件处理器
+
+            # 2. 注册核心游戏监听事件
             self.register_events(self.event_handlers)
-            
-            # 启动定时任务
-            self._schedule_tasks()
-            
-            # 设置全局插件实例引用
-            set_plugin_instance(self)
 
-            # 启动消息
-            startup_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已启用{ColorFormat.RESET}"
-            self.logger.info(startup_msg)
-            welcome_msg = f"{ColorFormat.BLUE}欢迎使用QQsync群服互通插件，{ColorFormat.YELLOW}作者：yuexps{ColorFormat.RESET}"
+            # 3. 启动并调度定时循环任务
+            self._schedule_timer_tasks()
+
+            # 4. 建立 WebSocket 子线程长连接
+            self._init_websocket_connection()
+
+            welcome_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已成功激活！欢迎使用。{ColorFormat.RESET}"
             self.logger.info(welcome_msg)
-            
         except Exception as e:
-            self.logger.error(f"插件启用失败: {e}")
-            raise
+            self.logger.error(f"插件启用遭遇致命错误: {e}")
+            raise e
 
-    def _init_managers(self):
-        """初始化各种管理器"""
-        # 配置管理器
-        self.config_manager = ConfigManager(Path(self.data_folder), self.logger)
-        
-        # 数据管理器
-        self.data_manager = DataManager(self, Path(self.data_folder), self.logger)
-        
-        # 验证管理器
-        self.verification_manager = VerificationManager(self, self.logger)
-        
-        # 权限管理器
-        self.permission_manager = PermissionManager(self, self.logger)
-        
-        # 事件处理器
-        self.event_handlers = EventHandlers(self)
-        
-        # UI管理器
-        self.ui_manager = UIManager(self)
-        
-        # 群成员缓存
-        self.group_members = set()
-        self.logged_left_players = set()
-        
-        self.logger.info(f"{ColorFormat.AQUA}管理器初始化完成{ColorFormat.RESET}")
+    def _init_managers(self) -> None:
+        """初始化全部管理模块并保持向后属性兼容"""
+        self.config_manager = Config(Path(self.data_folder), self.logger)
 
-    def _init_websocket(self):
-        """初始化WebSocket连接"""
-        # 确保没有重复的WebSocket客户端
-        if hasattr(self, 'ws_client') and self.ws_client:
-            self.logger.warning("NapCat WS 客户端已存在，停止旧实例")
-            self.ws_client.stop()
-        
-        # WebSocket客户端
+        # 数据库持久层
+        self.data_manager = Data(self, Path(self.data_folder), self.logger)
+
+        # 验证风控层
+        self.verification_manager = Verification(self, self.logger)
+
+        # 权限挂载控制层
+        self.permission_manager = Permissions(self, self.logger)
+
+        # 游戏监听事件层
+        self.event_handlers = Events(self)
+
+        # 游戏内绑定UI界面层
+        self.ui_manager = UI(self)
+
+        # 群成员隔离缓存 {群号: {QQ号集合}}
+        self.group_members: dict[int, set[str]] = {}
+        self.logged_left_players: set[str] = set()
+
+        # 责任链过滤管道
+        self.msg_pipeline = MessagePipeline()
+
+        # 群命令分发路由
+        self.group_command_handler = GroupCommandHandler(self)
+
+        # 网络出队回发指令变量
+        self._send_startup_message = True
+
+    def _init_websocket_connection(self) -> None:
+        """建立 WebSocket 自愈连接专用子线程事件循环"""
         self.ws_client = WebSocketClient(self)
-        
-        # WebSocket连接引用
-        self._current_ws = None
-        
-        # 确保没有重复的事件循环
-        if hasattr(self, '_loop') and self._loop:
-            self.logger.warning("检测到旧的事件循环，正在清理")
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        
-        # 创建专用事件循环
+
+        # 独立协程事件循环，规避 BDS 游戏主线程阻塞
         self._loop = asyncio.new_event_loop()
-        
-        # 在新线程里启动该循环
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
-        # 把协程提交到该循环
-        future = asyncio.run_coroutine_threadsafe(self.ws_client.connect_forever(), self._loop)
-        self._task = future
+        # 提交异步长连接常驻任务
+        self._task = asyncio.run_coroutine_threadsafe(self.ws_client.connect_forever(), self._loop)
 
-    def _run_loop(self):
-        """运行异步事件循环"""
+    def _run_loop(self) -> None:
+        """子线程事件循环常驻入口"""
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    def _schedule_tasks(self):
-        """安排定时任务"""
-        # 定时清理任务
-        self.server.scheduler.run_task(
-            self,
-            self._cleanup_expired_data,
-            delay=1200,   # 首次执行延迟1分钟 (60秒 × 20tick/秒)
-            period=6000   # 每5分钟执行一次 (300秒 × 20tick/秒)
-        )
-        
-        # 群成员检查任务
-        self.server.scheduler.run_task(
-            self,
-            self._update_group_members,
-            delay=1200,    # 首次执行延迟1分钟 (60秒 × 20tick/秒)
-            period=72000   # 每1小时执行一次 (3600秒 × 20tick/秒)
-        )
-        
-        # 验证码发送队列处理任务
+    def _schedule_timer_tasks(self) -> None:
+        """注册调度 Endstone 定时任务"""
+        # 1. 验证码防抖出队发送调度（每3秒，60tick）
         self.server.scheduler.run_task(
             self,
             self.verification_manager.process_verification_send_queue,
-            delay=60,     # 3秒后首次执行 (3秒 × 20tick/秒)
-            period=60    # 每3秒检查一次队列 (3秒 × 20tick/秒)
+            delay=60,
+            period=60,
         )
-        
-        # 验证码清理任务
-        self.server.scheduler.run_task(
-            self,
-            self.verification_manager.cleanup_expired_verifications,
-            delay=600,    # 30秒后首次执行 (30秒 × 20tick/秒)
-            period=1200   # 每1分钟检查一次过期验证码 (60秒 × 20tick/秒)
-        )
-        
-        # 在线时长计时器任务
+
+        # 2. 在线计时器增量结算（每60秒，1200tick）
         self.server.scheduler.run_task(
             self,
             self._update_online_playtime_timers,
-            delay=1200,   # 30秒后首次执行 (30秒 × 20tick/秒)
-            period=1200   # 每1分钟更新一次 (60秒 × 20tick/秒)
+            delay=1200,
+            period=1200,
         )
 
-    def _cleanup_expired_data(self):
-        """清理过期数据"""
+        # 3. 超时过期数据自愈清理（每5分钟，6000tick）
+        self.server.scheduler.run_task(
+            self,
+            self._cleanup_expired_data,
+            delay=1200,
+            period=6000,
+        )
+
+        # 4. 强制加退群成员列表缓存拉取（每小时，72000tick）
+        self.server.scheduler.run_task(
+            self,
+            self._update_group_members,
+            delay=1200,
+            period=72000,
+        )
+
+    def _update_online_playtime_timers(self) -> None:
+        """定时任务回调：阶段性结算当前在线玩家的时长统计数据"""
         try:
-            # 清理验证相关的过期数据
+            self.data_manager.update_online_timers(list(self.server.online_players))
+        except Exception as e:
+            self.logger.error(f"定时结算在线计时器失败: {e}")
+
+    def _cleanup_expired_data(self) -> None:
+        """定时任务回调：清理已退线玩家的临时数据与缓存文件"""
+        try:
             self.verification_manager.cleanup_expired_verifications()
-            
-            # 清理其他过期缓存
-            current_time = TimeUtils.get_timestamp()
-            
-            # 清理离线玩家的权限附件缓存（超过1小时）
-            online_players = {player.name for player in self.server.online_players}
-            offline_players = []
-            
-            for player_name in list(self.permission_manager.player_attachments.keys()):
-                if player_name not in online_players:
-                    offline_players.append(player_name)
-            
-            for player_name in offline_players:
-                self.permission_manager.cleanup_player_permissions(player_name)
-                self.verification_manager.cleanup_player_data(player_name)
-            
-            if offline_players:
-                self.logger.info(f"已清理 {len(offline_players)} 个离线玩家的缓存数据")
-            
-        except Exception as e:
-            self.logger.error(f"清理过期数据失败: {e}")
 
-    def _update_group_members(self):
-        """更新群成员缓存"""
-        try:
-            # 只有在启用强制绑定和退群检测时才更新群成员缓存
-            if not (self.config_manager.get_config("force_bind_qq", True) and 
-                    self.config_manager.get_config("check_group_member", True)):
-                return
-                
-            if self._current_ws:
-                from .websocket.handlers import get_all_groups_member_list
-                asyncio.run_coroutine_threadsafe(
-                    get_all_groups_member_list(self._current_ws),
-                    self._loop
-                )
-            else:
-                # 只在首次启动时使用info级别，运行中断开时使用warning级别
-                if not self.group_members:
-                    self.logger.info("系统正在连接QQ服务，群成员缓存更新稍后将自动执行")
-                else:
-                    self.logger.warning("QQ服务连接断开，群成员缓存更新暂时不可用")
-        except Exception as e:
-            self.logger.error(f"更新群成员缓存失败: {e}")
+            online_names = {p.name for p in self.server.online_players}
+            # 回收已离线角色的临时资源与权限附件挂载点，防止长效服内存泄露
+            for name in list(self.permission_manager.attachment_cache.keys()):
+                if name not in online_names:
+                    self.permission_manager.cleanup_player_permissions(name)
+                    self.verification_manager.cleanup_player_data(name)
 
-    def _update_online_playtime_timers(self):
-        """更新在线玩家的游戏时长计时器"""
-        try:
-            # 获取当前在线玩家列表
-            online_players = list(self.server.online_players)
-            
-            # 更新计时器
-            self.data_manager.update_online_timers(online_players)
-            
         except Exception as e:
-            self.logger.error(f"更新在线时长计时器失败: {e}")
+            self.logger.error(f"清理过期系统数据失败: {e}")
 
-    def on_command(self, sender, command, args):
-        """处理插件命令"""
+    def _update_group_members(self) -> None:
+        """定时任务回调：从 OneBot 主动刷新群成员列表"""
+        if not (self.config_manager.force_bind_qq and self.config_manager.check_group_member):
+            return
+
+        if self.ws_client and self.ws_client.is_connected:
+            # 异步发送请求以刷新缓存
+            async def refresh() -> None:
+                for g in self.config_manager.groups:
+                    await self.ws_client.send_message(
+                        {
+                            "action": "get_group_member_list",
+                            "params": {"group_id": g["id"]},
+                            "echo": f"get_group_member_list:{g['id']}",
+                        }
+                    )
+
+            asyncio.run_coroutine_threadsafe(refresh(), self._loop)
+        else:
+            self.logger.warning("OneBot WS 连接目前离线，群成员缓存定时更新已被跳过")
+
+    def on_command(self, sender: Any, command: Any, args: list[str]) -> bool:
+        """指令监听回调：分发游戏内 bindqq 指令"""
         if command.name == "bindqq":
-            return self._handle_bindqq_command(sender, command, args)
+            return self._handle_bindqq_command(sender, args)
         return False
 
-    def _handle_bindqq_command(self, sender, command, args):
-        """处理 /bindqq 命令"""
+    def _handle_bindqq_command(self, sender: Any, args: list[str]) -> bool:
+        """处理 /bindqq 指令逻辑"""
         try:
-            # 检查发送者是否为玩家
-            if not hasattr(sender, 'name') or not hasattr(sender, 'xuid'):
-                sender.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}此命令只能由玩家使用！{ColorFormat.RESET}")
+            if not (hasattr(sender, "name") and hasattr(sender, "xuid")):
+                sender.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}此命令仅限游戏内玩家使用！{ColorFormat.RESET}")
                 return True
-            
+
             player = sender
             player_name = player.name
-            
-            # 检查玩家是否已绑定QQ
+
+            # 已经绑定成功
             if self.data_manager.is_player_bound(player_name, player.xuid):
-                player_qq = self.data_manager.get_player_qq(player_name)
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}您的QQ绑定状态：{ColorFormat.RESET}")
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.AQUA}已绑定QQ: {player_qq}{ColorFormat.RESET}")
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}如需重新绑定，请联系管理员{ColorFormat.RESET}")
+                qq = self.data_manager.get_player_qq(player_name)
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}账号状态：已绑定 QQ ({qq}){ColorFormat.RESET}")
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}如需解绑，请联系管理员处理{ColorFormat.RESET}")
             else:
-                # 玩家未绑定，显示绑定表单
-                if self.config_manager.get_config("force_bind_qq", True):
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}您尚未绑定QQ，正在为您显示绑定表单...{ColorFormat.RESET}")
-                    # 延迟显示表单，确保消息先发送
+                if self.config_manager.force_bind_qq:
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}您尚未绑定 QQ 账号，正在加载绑定表单...{ColorFormat.RESET}")
+                    # 延时 5 个 tick 避开聊天发送冲突，弹出绑定 UI
                     self.server.scheduler.run_task(
                         self,
-                        lambda p=player: self.ui_manager.show_qq_binding_form(p) if self.is_valid_player(p) else None,
-                        delay=5  # 0.25秒延迟
+                        lambda p=player: self.ui_manager.show_qq_binding_form(p)
+                        if self.is_valid_player(p)
+                        else None,
+                        delay=5,
                     )
                 else:
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}QQ绑定功能当前未启用{ColorFormat.RESET}")
-            
+                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}强制绑定 QQ 校验当前已在 TOML 配置中关闭。{ColorFormat.RESET}")
             return True
         except Exception as e:
-            self.logger.error(f"处理 /bindqq 命令失败: {e}")
-            if hasattr(sender, 'send_message'):
-                sender.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}命令执行出错，请重试！{ColorFormat.RESET}")
+            self.logger.error(f"执行 /bindqq 命令失败: {e}")
+            if hasattr(sender, "send_message"):
+                sender.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}指令执行内部出错，请重试{ColorFormat.RESET}")
             return False
 
-    def is_valid_player(self, player) -> bool:
-        """检查玩家对象是否有效且在线"""
+    def is_valid_player(self, player: Any) -> bool:
+        """安全核验玩家对象在线且合法性"""
         try:
-            return (player and 
-                    hasattr(player, "send_message") and 
-                    hasattr(player, "name") and 
-                    hasattr(player, "xuid") and
-                    getattr(player, "is_online", True))
+            return bool(
+                player
+                and hasattr(player, "send_message")
+                and hasattr(player, "name")
+                and hasattr(player, "xuid")
+                and getattr(player, "is_online", True)
+            )
         except Exception:
             return False
-        
-    def api_send_message(self, text: str) -> bool:
-        """
-        QQ消息API
-        """
-        api_qq_enabled = self.config_manager.get_config("api_qq_enable", False)
-        if api_qq_enabled:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    send_group_msg_to_all_groups(self._current_ws, text=text),
-                    self._loop
-                )
 
-                # 不等待结果，立即返回成功
-                return True
-                
-            except Exception:
+    def api_send_message(self, text: str, group_id: int | None = None) -> bool:
+        """公共 API 接口：供其它插件调用以向指定或所有群组投递消息"""
+        if not self.config_manager.api_qq_enable:
+            return False
+
+        if group_id is not None:
+            configured_group_ids = {g["id"] for g in self.config_manager.groups}
+            if group_id not in configured_group_ids:
                 return False
-        else:
-            self.logger.warning("QQ消息API功能未启用！")
+
+        try:
+            if self.ws_client and self.ws_client.is_connected:
+                if group_id is not None:
+                    asyncio.run_coroutine_threadsafe(
+                        self.ws_client.send_group_message(group_id, text),
+                        self._loop,
+                    )
+                else:
+                    asyncio.run_coroutine_threadsafe(
+                        self.ws_client.broadcast_to_groups(text),
+                        self._loop,
+                    )
+                return True
+        except Exception:
+            pass
+        return False
 
     def on_disable(self) -> None:
-        """插件禁用"""
+        """插件卸载生命周期接口：安全关闭连接，结算计时数据入库"""
         try:
-            # 1. 立即解绑全局插件实例指针，切断消亡期子线程的回调链路
-            from .websocket.handlers import set_plugin_instance
-            set_plugin_instance(None)
-            
-            self.logger.info("正在禁用插件...")
-            
-            # 发送服务器停止消息（在停止WebSocket连接之前）
-            if (hasattr(self, '_current_ws') and self._current_ws and 
-                hasattr(self, '_loop') and self._loop and 
-                not self._loop.is_closed() and self._loop.is_running()):
-                try:
-                    server_end_msg = "[QQSync] 服务器已停止！"
-                    future = asyncio.run_coroutine_threadsafe(
-                        send_group_msg_to_all_groups(self._current_ws, server_end_msg),
-                        self._loop
-                    )
-                    # 等待消息发送完成，但设置超时
-                    future.result(timeout=3)
-                    self.logger.info("服务器停止消息已发送")
-                except Exception as msg_error:
-                    self.logger.warning(f"发送关闭消息失败（这是正常的）: {msg_error}")
-            else:
-                self.logger.warning("NapCat WS 连接不可用，跳过关闭消息发送")
+            self.logger.info("正在安全禁用并卸载 qqsync_plugin...")
 
-            # 保存数据
-            if hasattr(self, 'data_manager'):
-                # 清理计时器系统
+            # 1. 广播服务器停止通知
+            if self.ws_client and self.ws_client.is_connected:
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(
+                        self.ws_client.broadcast_to_groups("[QQSync] 游戏服务器已停止运行！"),
+                        self._loop,
+                    )
+                    # 强阻塞3秒等待发送回执
+                    fut.result(timeout=3)
+                except Exception:
+                    pass
+
+            # 2. 结算全部在线玩家时长统计，并批量回写 SQLite
+            if hasattr(self, "data_manager"):
                 self.data_manager.cleanup_timer_system()
-                # 保存最终数据
                 self.data_manager.save_data()
-            
-            # 停止WebSocket连接
-            if hasattr(self, 'ws_client') and self.ws_client:
+
+            # 3. 关闭 WebSocket 网络层与缓冲区写协程
+            if hasattr(self, "ws_client") and self.ws_client:
                 self.ws_client.stop()
-            
-            # 停止事件循环
-            if hasattr(self, '_loop') and self._loop:
+
+            # 4. 彻底注销子线程事件循环
+            if hasattr(self, "_loop") and self._loop:
                 try:
                     if not self._loop.is_closed():
                         if self._loop.is_running():
                             self._loop.call_soon_threadsafe(self._loop.stop)
-                        else:
-                            self.logger.info("事件循环已停止，无需再次停止")
-                    else:
-                        self.logger.info("事件循环已关闭")
-                except Exception as loop_error:
-                    self.logger.warning(f"停止事件循环时出错: {loop_error}")
+                except Exception:
+                    pass
 
-                # 等待线程结束
-                if hasattr(self, '_thread') and self._thread and self._thread.is_alive():
+                # 等待线程安全收尾
+                if hasattr(self, "_thread") and self._thread and self._thread.is_alive():
                     try:
                         self._thread.join(timeout=5)
-                        if self._thread.is_alive():
-                            self.logger.warning("事件循环线程未能在5秒内正常结束")
-                    except Exception as thread_error:
-                        self.logger.warning(f"等待线程结束时出错: {thread_error}")
+                    except Exception:
+                        pass
 
-            self.logger.info(f"{ColorFormat.YELLOW}qqsync_plugin 已禁用{ColorFormat.RESET}")
-            
+                try:
+                    self._loop.close()
+                except Exception:
+                    pass
+
+            self.logger.info(f"{ColorFormat.YELLOW}qqsync_plugin 卸载清理完成。{ColorFormat.RESET}")
         except Exception as e:
-            self.logger.error(f"插件禁用过程中出错: {e}")
-            # 确保在任何情况下都尝试保存数据
-            try:
-                if hasattr(self, 'data_manager'):
-                    self.data_manager.save_data()
-            except Exception as save_error:
-                self.logger.error(f"保存数据失败: {save_error}")
+            self.logger.error(f"插件卸载回收资源失败: {e}")
