@@ -155,7 +155,7 @@ class UI:
                 return
 
             # 黑名单校验
-            if self.plugin.data_manager.is_player_banned(player.name):
+            if self.plugin.data_manager.is_player_banned(player.name, player.xuid):
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}[拒绝] 该游戏角色处于封禁期，无法绑定QQ{ColorFormat.RESET}")
                 return
 

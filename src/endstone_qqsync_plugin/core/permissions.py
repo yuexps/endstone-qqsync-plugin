@@ -21,7 +21,7 @@ class Permissions:
             return False
 
         # 已封禁玩家强制设为访客
-        if self.plugin.data_manager.is_player_banned(player_name):
+        if self.plugin.data_manager.is_player_banned(player_name, player_xuid):
             return True
 
         # 未绑定QQ玩家设为访客
@@ -30,7 +30,7 @@ class Permissions:
 
         # 退群检测
         if self.plugin.config_manager.check_group_member:
-            player_qq = self.plugin.data_manager.get_player_qq(player_name)
+            player_qq = self.plugin.data_manager.get_player_qq(player_name, player_xuid)
             if player_qq:
                 is_in_any_group = False
                 has_cached_groups = False
@@ -58,14 +58,14 @@ class Permissions:
         if not self.plugin.config_manager.force_bind_qq:
             return ""
 
-        if self.plugin.data_manager.is_player_banned(player_name):
+        if self.plugin.data_manager.is_player_banned(player_name, player_xuid):
             return "已被封禁"
 
         if not self.plugin.data_manager.is_player_bound(player_name, player_xuid):
             return "未绑定QQ"
 
         if self.plugin.config_manager.check_group_member:
-            player_qq = self.plugin.data_manager.get_player_qq(player_name)
+            player_qq = self.plugin.data_manager.get_player_qq(player_name, player_xuid)
             if player_qq:
                 is_in_any_group = False
                 has_cached_groups = False

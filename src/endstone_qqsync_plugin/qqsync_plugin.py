@@ -340,7 +340,7 @@ class qqsync(Plugin):
 
             # 已经绑定成功
             if self.data_manager.is_player_bound(player_name, player.xuid):
-                qq = self.data_manager.get_player_qq(player_name)
+                qq = self.data_manager.get_player_qq(player_name, player.xuid)
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}账号状态：已绑定 QQ ({qq}){ColorFormat.RESET}")
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}如需解绑，请联系管理员处理{ColorFormat.RESET}")
             else:

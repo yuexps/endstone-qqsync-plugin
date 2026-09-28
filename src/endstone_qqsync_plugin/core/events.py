@@ -49,16 +49,16 @@ class Events:
             return False
         return True
 
-    def _is_admin_player(self, player_name: str) -> bool:
+    def _is_admin_player(self, player_name: str, player_xuid: str | None = None) -> bool:
         """基于绑定的 QQ 号核对玩家是否为 TOML 中的超级管理员"""
-        qq = self.plugin.data_manager.get_player_qq(player_name)
+        qq = self.plugin.data_manager.get_player_qq(player_name, player_xuid)
         if qq:
             return qq in self.plugin.config_manager.admins
         return False
 
-    def _check_chat_cooldown(self, player_name: str) -> tuple[bool, str]:
+    def _check_chat_cooldown(self, player_name: str, player_xuid: str | None = None) -> tuple[bool, str]:
         """检查玩家是否正处于刷屏禁言惩罚期"""
-        if self._is_admin_player(player_name):
+        if self._is_admin_player(player_name, player_xuid):
             return True, ""
 
         now = time.time()
@@ -75,12 +75,12 @@ class Events:
 
         return True, ""
 
-    def _check_and_update_spam(self, player_name: str) -> tuple[bool, str]:
+    def _check_and_update_spam(self, player_name: str, player_xuid: str | None = None) -> tuple[bool, str]:
         """滑窗算法检测玩家是否存在高频发言刷屏行为"""
         if self.plugin.config_manager.chat_count_limit == -1:
             return False, ""
 
-        if self._is_admin_player(player_name):
+        if self._is_admin_player(player_name, player_xuid):
             return False, ""
 
         now = time.time()
@@ -113,30 +113,30 @@ class Events:
 
             self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 登录服务器")
 
+            # 先按 XUID 归一化身份：改名时同步名称，避免后续登录写入产生同名重复记录
+            old_name = self.plugin.data_manager.update_player_name(player_xuid, player_name)
+            if old_name:
+                self.logger.info(f"检测到玩家改名: {old_name} -> {player_name}")
+                # 同步修改群名片
+                existing = self.plugin.data_manager.get_player_by_xuid(player_xuid)
+                qq = existing.get("qq")
+                if (
+                    qq
+                    and self.plugin.ws_client
+                    and self.plugin.ws_client.is_connected
+                    and self.plugin.config_manager.sync_group_card
+                ):
+                    import asyncio
+                    from ..qq.commands import sync_group_card_for_all
+
+                    asyncio.run_coroutine_threadsafe(
+                        sync_group_card_for_all(self.plugin.ws_client, int(qq), player_name),
+                        self.plugin._loop,
+                    )
+
             # 更新登录记录并启动在线时长累时
             self.plugin.data_manager.update_player_join(player_name, player_xuid)
             self.plugin.data_manager.start_player_timer(player_name, player_xuid)
-
-            # 检测 XUID 映射更名
-            existing = self.plugin.data_manager.get_player_by_xuid(player_xuid)
-            if existing and existing.get("name") != player_name:
-                old_name = existing["name"]
-                if self.plugin.data_manager.update_player_name(old_name, player_name, player_xuid):
-                    # 同步修改群名片
-                    qq = existing.get("qq")
-                    if (
-                        qq
-                        and self.plugin.ws_client
-                        and self.plugin.ws_client.is_connected
-                        and self.plugin.config_manager.sync_group_card
-                    ):
-                        import asyncio
-                        from ..qq.commands import sync_group_card_for_all
-
-                        asyncio.run_coroutine_threadsafe(
-                            sync_group_card_for_all(self.plugin.ws_client, int(qq), player_name),
-                            self.plugin._loop,
-                        )
 
             # 延迟 1 秒（20tick）应用权限挂载，给系统处理登录缓冲
             self.plugin.server.scheduler.run_task(
@@ -155,7 +155,7 @@ class Events:
                     self.plugin,
                     lambda: self.plugin.ui_manager.show_qq_binding_form(player)
                     if self.plugin.is_valid_player(player)
-                    and not self.plugin.data_manager.is_player_banned(player_name)
+                    and not self.plugin.data_manager.is_player_banned(player_name, player_xuid)
                     else None,
                     delay=60,
                 )
@@ -163,7 +163,7 @@ class Events:
             # 推送登录事件到所有群组
             if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
                 playtime_info = self.plugin.data_manager.get_player_playtime_info(
-                    player_name, self.plugin.server.online_players
+                    player_name, self.plugin.server.online_players, player_xuid
                 )
                 sessions = playtime_info.get("session_count", 0)
 
@@ -198,18 +198,19 @@ class Events:
         try:
             player = event.player
             player_name = player.name
+            player_xuid = player.xuid
 
-            self.logger.info(f"玩家 {player_name} (XUID: {player.xuid}) 离开服务器")
+            self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 离开服务器")
 
             # 计算并保存本次在线时长
             session_time = 0
-            if player_name in self.plugin.data_manager._session_start_times:
-                start_time = self.plugin.data_manager._session_start_times[player_name]
+            start_time = self.plugin.data_manager.get_session_start_time(player_name, player_xuid)
+            if start_time is not None:
                 session_time = int(time.time()) - start_time
 
             # 正常执行时长结算落盘（会自动同步更新内存 binding_data）
-            self.plugin.data_manager.stop_player_timer(player_name)
-            self.plugin.data_manager.update_player_quit(player_name)
+            self.plugin.data_manager.stop_player_timer(player_name, player_xuid)
+            self.plugin.data_manager.update_player_quit(player_name, player_xuid)
 
             # 清除权限附件快照缓存及验证状态，防内存泄漏
             self.plugin.permission_manager.cleanup_player_permissions(player_name)
@@ -221,7 +222,7 @@ class Events:
             if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
                 # 获取最新被同步的累计游玩时长
                 playtime_info = self.plugin.data_manager.get_player_playtime_info(
-                    player_name, []
+                    player_name, [], player_xuid
                 )
                 total_playtime = playtime_info.get("total_playtime", 0)
 
@@ -260,14 +261,14 @@ class Events:
                 return
 
             # 1. 频控惩罚校验
-            can_chat, err = self._check_chat_cooldown(player_name)
+            can_chat, err = self._check_chat_cooldown(player_name, player.xuid)
             if not can_chat:
                 event.is_cancelled = True
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{err}{ColorFormat.RESET}")
                 return
 
             # 2. 发发言频控判定
-            is_spam, err = self._check_and_update_spam(player_name)
+            is_spam, err = self._check_and_update_spam(player_name, player.xuid)
             if is_spam:
                 event.is_cancelled = True
                 player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{err}{ColorFormat.RESET}")
