@@ -5,6 +5,12 @@
 import datetime
 from .timing import Timing, CHINA_TZ
 
+# QQ 号长度范围
+_QQ_MIN_LENGTH = 5
+_QQ_MAX_LENGTH = 11
+# 每小时秒数，用于游玩时长格式化
+_SECONDS_PER_HOUR = 3600
+
 
 def format_timestamp(timestamp: int | float | None) -> str:
     """格式化秒级时间戳为规范的年月日时分秒"""
@@ -19,8 +25,8 @@ def format_timestamp(timestamp: int | float | None) -> str:
 
 def format_playtime(seconds: int) -> str:
     """将秒数格式化为时分秒文本"""
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
+    hours = seconds // _SECONDS_PER_HOUR
+    minutes = (seconds % _SECONDS_PER_HOUR) // 60
     remaining_seconds = seconds % 60
 
     if hours > 0:
@@ -32,7 +38,7 @@ def format_playtime(seconds: int) -> str:
 
 def is_valid_qq_number(qq: str | None) -> bool:
     """校验QQ号是否符合5-11位纯数字的规范"""
-    return bool(qq and qq.isdigit() and 5 <= len(qq) <= 11)
+    return bool(qq and qq.isdigit() and _QQ_MIN_LENGTH <= len(qq) <= _QQ_MAX_LENGTH)
 
 
 def clean_player_name(name: str | None) -> str:

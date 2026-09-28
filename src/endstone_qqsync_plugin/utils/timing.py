@@ -9,9 +9,12 @@ from typing import Any
 
 CHINA_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
+# 每小时秒数，用于运行时长换算
+_SECONDS_PER_HOUR = 3600
+
 
 class Timing:
-    """提供基于东八区的统一时间计算与格式化服务"""
+    """东八区时间计算与格式化"""
 
     @classmethod
     def get_current_time(cls) -> datetime.datetime:
@@ -50,7 +53,7 @@ class Timing:
 
         uptime = current_time - start_time
         days = uptime.days
-        hours, remainder = divmod(uptime.seconds, 3600)
+        hours, remainder = divmod(uptime.seconds, _SECONDS_PER_HOUR)
         minutes, seconds = divmod(remainder, 60)
 
         uptime_str = cls._format_duration(days, hours, minutes, seconds)

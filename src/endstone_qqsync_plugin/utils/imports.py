@@ -17,7 +17,7 @@ def setup_lib_path() -> None:
 
 
 def import_websockets() -> Any:
-    """安全导入内置或系统的 websockets 模块"""
+    """导入内置或系统的 websockets 模块"""
     setup_lib_path()
     try:
         import websockets
@@ -26,5 +26,5 @@ def import_websockets() -> Any:
         raise ImportError(f"无法导入 websockets 库: {e}")
 
 
-# 模块加载时自动执行环境初始化
+# 模块加载时初始化运行环境
 setup_lib_path()

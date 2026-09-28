@@ -2,6 +2,7 @@
 游戏内事件处理器模块
 """
 
+import asyncio
 from collections import defaultdict, deque
 import time
 from typing import Any
@@ -114,83 +115,110 @@ class Events:
             self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 登录服务器")
 
             # 先按 XUID 归一化身份：改名时同步名称，避免后续登录写入产生同名重复记录
-            old_name = self.plugin.data_manager.update_player_name(player_xuid, player_name)
-            if old_name:
-                self.logger.info(f"检测到玩家改名: {old_name} -> {player_name}")
-                # 同步修改群名片
-                existing = self.plugin.data_manager.get_player_by_xuid(player_xuid)
-                qq = existing.get("qq")
-                if (
-                    qq
-                    and self.plugin.ws_client
-                    and self.plugin.ws_client.is_connected
-                    and self.plugin.config_manager.sync_group_card
-                ):
-                    import asyncio
-                    from ..qq.commands import sync_group_card_for_all
-
-                    asyncio.run_coroutine_threadsafe(
-                        sync_group_card_for_all(self.plugin.ws_client, int(qq), player_name),
-                        self.plugin._loop,
-                    )
+            self._sync_renamed_player_card(player_xuid, player_name)
 
             # 更新登录记录并启动在线时长累时
             self.plugin.data_manager.update_player_join(player_name, player_xuid)
             self.plugin.data_manager.start_player_timer(player_name, player_xuid)
 
             # 延迟 1 秒（20tick）应用权限挂载，给系统处理登录缓冲
-            self.plugin.server.scheduler.run_task(
-                self.plugin,
-                lambda: self.plugin.permission_manager.check_and_apply_permissions(player)
-                if self.plugin.is_valid_player(player)
-                else None,
-                delay=20,
-            )
+            self._schedule_join_permission_check(player)
 
             # 延迟 3 秒（60tick）引导未绑定玩家弹出 UI 表单
-            if self.plugin.config_manager.force_bind_qq and not self.plugin.data_manager.is_player_bound(
-                player_name, player_xuid
-            ):
-                self.plugin.server.scheduler.run_task(
-                    self.plugin,
-                    lambda: self.plugin.ui_manager.show_qq_binding_form(player)
-                    if self.plugin.is_valid_player(player)
-                    and not self.plugin.data_manager.is_player_banned(player_name, player_xuid)
-                    else None,
-                    delay=60,
-                )
+            self._schedule_unbound_binding_form(player, player_name, player_xuid)
 
             # 推送登录事件到所有群组
-            if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
-                playtime_info = self.plugin.data_manager.get_player_playtime_info(
-                    player_name, self.plugin.server.online_players, player_xuid
-                )
-                sessions = playtime_info.get("session_count", 0)
-
-                if sessions == 1:
-                    try:
-                        join_msg = self.plugin.config_manager.msg_first_join.format(player=player_name)
-                    except Exception as ex:
-                        self.logger.warning(f"msg_first_join 模板格式化失败，使用默认值。错误: {ex}")
-                        join_msg = f"[首次加入] 欢迎新玩家 {player_name} 首次进入服务器！"
-                else:
-                    try:
-                        join_msg = self.plugin.config_manager.msg_join.format(
-                            player=player_name, sessions=sessions
-                        )
-                    except Exception as ex:
-                        self.logger.warning(f"msg_join 模板格式化失败，使用默认值。错误: {ex}")
-                        join_msg = f"[+] {player_name} 上线了 (第 {sessions} 次登录)"
-
-                import asyncio
-
-                asyncio.run_coroutine_threadsafe(
-                    self.plugin.ws_client.broadcast_to_groups(join_msg),
-                    self.plugin._loop,
-                )
+            self._push_join_notice(player_name, player_xuid)
 
         except Exception as e:
             self.logger.error(f"登录事件处理发生内部错误: {e}")
+
+    def _sync_renamed_player_card(self, player_xuid: str, player_name: str) -> None:
+        """玩家改名时同步名称并更新 QQ 群名片"""
+        old_name = self.plugin.data_manager.update_player_name(player_xuid, player_name)
+        if old_name:
+            self.logger.info(f"检测到玩家改名: {old_name} -> {player_name}")
+            # 同步修改群名片
+            existing = self.plugin.data_manager.get_player_by_xuid(player_xuid)
+            qq = existing.get("qq")
+            if (
+                qq
+                and self.plugin.ws_client
+                and self.plugin.ws_client.is_connected
+                and self.plugin.config_manager.sync_group_card
+            ):
+                from ..qq.commands import sync_group_card_for_all
+
+                asyncio.run_coroutine_threadsafe(
+                    sync_group_card_for_all(self.plugin.ws_client, int(qq), player_name),
+                    self.plugin._loop,
+                )
+
+    def _schedule_join_permission_check(self, player: Any) -> None:
+        """延迟 20tick 应用权限挂载"""
+        self.plugin.server.scheduler.run_task(
+            self.plugin,
+            lambda: self.plugin.permission_manager.check_and_apply_permissions(player)
+            if self.plugin.is_valid_player(player)
+            else None,
+            delay=20,
+        )
+
+    def _schedule_unbound_binding_form(self, player: Any, player_name: str, player_xuid: str) -> None:
+        """延迟 60tick 向未绑定玩家弹出绑定表单"""
+        if self.plugin.config_manager.force_bind_qq and not self.plugin.data_manager.is_player_bound(
+            player_name, player_xuid
+        ):
+            self.plugin.server.scheduler.run_task(
+                self.plugin,
+                lambda: self.plugin.ui_manager.show_qq_binding_form(player)
+                if self.plugin.is_valid_player(player)
+                and not self.plugin.data_manager.is_player_banned(player_name, player_xuid)
+                else None,
+                delay=60,
+            )
+
+    def _broadcast_to_qq(self, text: str, only_chat_enabled: bool = False) -> None:
+        """向 QQ 群广播文本消息，连接不可用时跳过"""
+        if not (self.plugin.ws_client and self.plugin.ws_client.is_connected):
+            return
+
+        asyncio.run_coroutine_threadsafe(
+            self.plugin.ws_client.broadcast_to_groups(text, only_chat_enabled=only_chat_enabled),
+            self.plugin._loop,
+        )
+
+    def _push_join_notice(self, player_name: str, player_xuid: str) -> None:
+        """推送上线消息到所有群组"""
+        if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
+            playtime_info = self.plugin.data_manager.get_player_playtime_info(
+                player_name, self.plugin.server.online_players, player_xuid
+            )
+            sessions = playtime_info.get("session_count", 0)
+            join_msg = self._build_join_message(player_name, sessions)
+            self._broadcast_to_qq(join_msg)
+
+    def _build_join_message(self, player_name: str, sessions: int) -> str:
+        """按登录次数生成上线消息"""
+        if sessions == 1:
+            return self._format_first_join_message(player_name)
+        return self._format_return_join_message(player_name, sessions)
+
+    def _format_first_join_message(self, player_name: str) -> str:
+        """用首次加入模板格式化消息，模板异常时回退默认文案"""
+        try:
+            return self.plugin.config_manager.msg_first_join.format(player=player_name)
+        except Exception as ex:
+            self.logger.warning(f"msg_first_join 模板格式化失败，使用默认值。错误: {ex}")
+            return f"[首次加入] 欢迎新玩家 {player_name} 首次进入服务器！"
+
+    def _format_return_join_message(self, player_name: str, sessions: int) -> str:
+        """用再次登录模板格式化消息，模板异常时回退默认文案"""
+        try:
+            return self.plugin.config_manager.msg_join.format(player=player_name, sessions=sessions)
+        except Exception as ex:
+            self.logger.warning(f"msg_join 模板格式化失败，使用默认值。错误: {ex}")
+            return f"[+] {player_name} 上线了 (第 {sessions} 次登录)"
 
     @event_handler
     def on_player_quit(self, event: PlayerQuitEvent) -> None:
@@ -203,50 +231,56 @@ class Events:
             self.logger.info(f"玩家 {player_name} (XUID: {player_xuid}) 离开服务器")
 
             # 计算并保存本次在线时长
-            session_time = 0
-            start_time = self.plugin.data_manager.get_session_start_time(player_name, player_xuid)
-            if start_time is not None:
-                session_time = int(time.time()) - start_time
-
-            # 正常执行时长结算落盘（会自动同步更新内存 binding_data）
-            self.plugin.data_manager.stop_player_timer(player_name, player_xuid)
-            self.plugin.data_manager.update_player_quit(player_name, player_xuid)
-
-            # 清除权限附件快照缓存及验证状态，防内存泄漏
-            self.plugin.permission_manager.cleanup_player_permissions(player_name)
-            self.plugin.verification_manager.cleanup_player_data(player_name)
-            self.player_chat_history.pop(player_name, None)
-            self.player_spam_penalty.pop(player_name, None)
+            session_time = self._get_session_seconds(player_name, player_xuid)
+            self._save_player_quit_state(player_name, player_xuid)
 
             # 推送退出消息到 QQ 群
-            if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
-                # 获取最新被同步的累计游玩时长
-                playtime_info = self.plugin.data_manager.get_player_playtime_info(
-                    player_name, [], player_xuid
-                )
-                total_playtime = playtime_info.get("total_playtime", 0)
-
-                # 统一调用通用辅助函数格式化时长
-                playtime_str = format_playtime(session_time)
-                total_playtime_str = format_playtime(total_playtime)
-
-                try:
-                    quit_msg = self.plugin.config_manager.msg_quit.format(
-                        player=player_name, time=playtime_str, total_time=total_playtime_str
-                    )
-                except Exception as ex:
-                    self.logger.warning(f"msg_quit 模板格式化失败，使用默认值。错误: {ex}")
-                    quit_msg = f"[-] {player_name} 下线了 ({playtime_str})"
-
-                import asyncio
-
-                asyncio.run_coroutine_threadsafe(
-                    self.plugin.ws_client.broadcast_to_groups(quit_msg),
-                    self.plugin._loop,
-                )
+            self._push_quit_notice(player_name, player_xuid, session_time)
 
         except Exception as e:
             self.logger.error(f"登出事件处理发生内部错误: {e}")
+
+    def _get_session_seconds(self, player_name: str, player_xuid: str) -> int:
+        """计算本次在线秒数"""
+        start_time = self.plugin.data_manager.get_session_start_time(player_name, player_xuid)
+        if start_time is None:
+            return 0
+        return int(time.time()) - start_time
+
+    def _save_player_quit_state(self, player_name: str, player_xuid: str) -> None:
+        """结算在线时长并清理玩家缓存"""
+        # 结算时长落盘
+        self.plugin.data_manager.stop_player_timer(player_name, player_xuid)
+        self.plugin.data_manager.update_player_quit(player_name, player_xuid)
+
+        # 清除权限附件快照缓存及验证状态，防内存泄漏
+        self.plugin.permission_manager.cleanup_player_permissions(player_name)
+        self.plugin.verification_manager.cleanup_player_data(player_name)
+        self.player_chat_history.pop(player_name, None)
+        self.player_spam_penalty.pop(player_name, None)
+
+    def _push_quit_notice(self, player_name: str, player_xuid: str, session_time: int) -> None:
+        """推送退出消息到 QQ 群"""
+        if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
+            # 获取最新被同步的累计游玩时长
+            playtime_info = self.plugin.data_manager.get_player_playtime_info(player_name, [], player_xuid)
+            total_playtime = playtime_info.get("total_playtime", 0)
+
+            # 格式化时长文本
+            playtime_str = format_playtime(session_time)
+            total_playtime_str = format_playtime(total_playtime)
+            quit_msg = self._format_quit_message(player_name, playtime_str, total_playtime_str)
+            self._broadcast_to_qq(quit_msg)
+
+    def _format_quit_message(self, player_name: str, playtime_str: str, total_playtime_str: str) -> str:
+        """用退出模板格式化消息，模板异常时回退默认文案"""
+        try:
+            return self.plugin.config_manager.msg_quit.format(
+                player=player_name, time=playtime_str, total_time=total_playtime_str
+            )
+        except Exception as ex:
+            self.logger.warning(f"msg_quit 模板格式化失败，使用默认值。错误: {ex}")
+            return f"[-] {player_name} 下线了 ({playtime_str})"
 
     @event_handler
     def on_player_chat(self, event: PlayerChatEvent) -> None:
@@ -260,55 +294,66 @@ class Events:
             if msg.startswith("/"):
                 return
 
-            # 1. 频控惩罚校验
-            can_chat, err = self._check_chat_cooldown(player_name, player.xuid)
-            if not can_chat:
-                event.is_cancelled = True
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{err}{ColorFormat.RESET}")
+            # 频控惩罚、刷屏判定与访客权限言论拦截
+            if self._is_chat_blocked(event):
                 return
 
-            # 2. 发发言频控判定
-            is_spam, err = self._check_and_update_spam(player_name, player.xuid)
-            if is_spam:
-                event.is_cancelled = True
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{err}{ColorFormat.RESET}")
-                return
-
-            # 3. 访客权限言论拦截
-            if self.plugin.config_manager.force_bind_qq:
-                if not player.has_permission("qqsync.chat"):
-                    event.is_cancelled = True
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定 QQ 号后才能在公屏发言！{ColorFormat.RESET}")
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请在游戏内使用 /bindqq 开始绑定流程{ColorFormat.RESET}")
-                    return
-
-            # 4. 转发消息至各 QQ 群组
-            if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
-                # 除非关闭了强制绑定，否则必须绑定才能转发
-                if (
-                    self.plugin.data_manager.is_player_bound(player_name, player.xuid)
-                    or not self.plugin.config_manager.force_bind_qq
-                ):
-                    import asyncio
-
-                    # 过消息过滤责任链中间件
-                    filtered_text, ctx = self.plugin.msg_pipeline.filter_message(
-                        text=msg,
-                        direction="game_to_qq",
-                        custom_ban_words=self.plugin.config_manager.custom_ban_words,
-                    )
-
-                    if ctx.get("has_sensitive"):
-                        self.logger.warning(f"玩家 {player_name} 消息中含有敏感词已过滤: {msg}")
-
-                    chat_payload = f"{player_name}: {filtered_text}"
-
-                    asyncio.run_coroutine_threadsafe(
-                        self.plugin.ws_client.broadcast_to_groups(chat_payload, only_chat_enabled=True),
-                        self.plugin._loop,
-                    )
+            # 转发消息至各 QQ 群组
+            self._forward_chat_to_groups(player_name, player.xuid, msg)
         except Exception as e:
             self.logger.error(f"玩家聊天转发事件发生内部错误: {e}")
+
+    def _is_chat_blocked(self, event: PlayerChatEvent) -> bool:
+        """依次校验禁言惩罚、发言频控、访客权限，命中则取消事件"""
+        player = event.player
+        player_name = player.name
+
+        can_chat, err = self._check_chat_cooldown(player_name, player.xuid)
+        if not can_chat:
+            event.is_cancelled = True
+            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{err}{ColorFormat.RESET}")
+            return True
+
+        is_spam, err = self._check_and_update_spam(player_name, player.xuid)
+        if is_spam:
+            event.is_cancelled = True
+            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}{err}{ColorFormat.RESET}")
+            return True
+
+        if self.plugin.config_manager.force_bind_qq:
+            if not player.has_permission("qqsync.chat"):
+                event.is_cancelled = True
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您需要绑定 QQ 号后才能在公屏发言！{ColorFormat.RESET}")
+                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请在游戏内使用 /bindqq 开始绑定流程{ColorFormat.RESET}")
+                return True
+
+        return False
+
+    def _forward_chat_to_groups(self, player_name: str, player_xuid: str, msg: str) -> None:
+        """过滤后转发公屏消息至各 QQ 群组"""
+        if not (
+            self.plugin.ws_client
+            and self.plugin.ws_client.is_connected
+            and self.plugin.config_manager.enable_game_to_qq
+        ):
+            return
+
+        # 除非关闭了强制绑定，否则必须绑定才能转发
+        if not self.plugin.data_manager.is_player_bound(player_name, player_xuid) and self.plugin.config_manager.force_bind_qq:
+            return
+
+        # 过消息过滤责任链中间件
+        filtered_text, ctx = self.plugin.msg_pipeline.filter_message(
+            text=msg,
+            direction="game_to_qq",
+            custom_ban_words=self.plugin.config_manager.custom_ban_words,
+        )
+
+        if ctx.get("has_sensitive"):
+            self.logger.warning(f"玩家 {player_name} 消息中含有敏感词已过滤: {msg}")
+
+        chat_payload = f"{player_name}: {filtered_text}"
+        self._broadcast_to_qq(chat_payload, only_chat_enabled=True)
 
     @event_handler
     def on_player_death(self, event: PlayerDeathEvent) -> None:
@@ -318,24 +363,23 @@ class Events:
             player_name = player.name
 
             if self.plugin.ws_client and self.plugin.ws_client.is_connected and self.plugin.config_manager.enable_game_to_qq:
-                # 核对绑定权限
-                if (
-                    self.plugin.data_manager.is_player_bound(player_name, player.xuid)
-                    or not self.plugin.config_manager.force_bind_qq
-                ):
-                    lang = event.player.server.language
-                    death_msg_raw = event.death_message
-                    # 获取中文本地化文本
-                    death_msg = lang.translate(death_msg_raw, locale="zh_CN")
-
-                    import asyncio
-
-                    asyncio.run_coroutine_threadsafe(
-                        self.plugin.ws_client.broadcast_to_groups(death_msg, only_chat_enabled=True),
-                        self.plugin._loop,
-                    )
+                self._forward_death_to_groups(event, player_name)
         except Exception as e:
             self.logger.error(f"处理玩家死亡事件转发失败: {e}")
+
+    def _forward_death_to_groups(self, event: PlayerDeathEvent, player_name: str) -> None:
+        """核对绑定权限后转发中文本地化死亡消息"""
+        # 核对绑定权限
+        if (
+            self.plugin.data_manager.is_player_bound(player_name, event.player.xuid)
+            or not self.plugin.config_manager.force_bind_qq
+        ):
+            lang = event.player.server.language
+            death_msg_raw = event.death_message
+            # 获取中文本地化文本
+            death_msg = lang.translate(death_msg_raw, locale="zh_CN")
+
+            self._broadcast_to_qq(death_msg, only_chat_enabled=True)
 
     @event_handler
     def on_block_break(self, event: BlockBreakEvent) -> None:
@@ -373,20 +417,28 @@ class Events:
     def on_actor_damage(self, event: ActorDamageEvent) -> None:
         """攻击伤害行为"""
         try:
-            if not self.plugin.config_manager.force_bind_qq:
-                return
-
-            damager = event.damage_source.actor
-            # 仅在伤害源确实是玩家的情况下触发校验
-            if (
-                damager
-                and hasattr(damager, "name")
-                and hasattr(damager, "xuid")
-                and hasattr(damager, "has_permission")
-            ):
-                if not damager.has_permission("qqsync.combat"):
-                    event.is_cancelled = True
-                    damager.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您当前为访客权限，无法攻击生物或玩家！{ColorFormat.RESET}")
-                    damager.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请在游戏内使用 /bindqq 完成QQ绑定后获取权限{ColorFormat.RESET}")
+            self._intercept_unbound_damage(event)
         except Exception as e:
             self.logger.error(f"处理伤害事件拦截发生错误: {e}")
+
+    def _intercept_unbound_damage(self, event: ActorDamageEvent) -> None:
+        """拦截未绑定玩家造成的伤害"""
+        if not self.plugin.config_manager.force_bind_qq:
+            return
+
+        damager = event.damage_source.actor
+        # 仅在伤害源确实是玩家的情况下触发校验
+        if (
+            damager
+            and hasattr(damager, "name")
+            and hasattr(damager, "xuid")
+            and hasattr(damager, "has_permission")
+        ):
+            self._cancel_damage_without_permission(event, damager)
+
+    def _cancel_damage_without_permission(self, event: ActorDamageEvent, damager: Any) -> None:
+        """伤害源无战斗权限时取消事件并发送绑定提示"""
+        if not damager.has_permission("qqsync.combat"):
+            event.is_cancelled = True
+            damager.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}您当前为访客权限，无法攻击生物或玩家！{ColorFormat.RESET}")
+            damager.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}请在游戏内使用 /bindqq 完成QQ绑定后获取权限{ColorFormat.RESET}")

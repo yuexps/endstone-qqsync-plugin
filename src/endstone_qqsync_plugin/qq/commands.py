@@ -3,11 +3,39 @@ QQ 群内命令处理器与分发系统
 """
 
 import asyncio
-import datetime
 import html
 import shlex
+from dataclasses import dataclass, field
 from typing import Any
 from ..utils import format_playtime, format_timestamp, Timing
+
+# /banlist 单次最多列出的封禁记录条数
+_BANLIST_LIMIT = 15
+
+
+@dataclass
+class CommandContext:
+    """单条群命令的解析结果与执行上下文"""
+
+    ws_client: Any
+    user_id: int
+    group_id: int
+    display_name: str
+    raw_msg: str
+    args: list[str] | None = None
+    name: str = field(init=False, default="")
+
+    def __post_init__(self) -> None:
+        # 已显式给出参数时不再分词（如群内直接发送验证码的场景）
+        if self.args is not None:
+            return
+        # 使用 shlex 分词以支持双引号包裹带空格的参数
+        try:
+            parts = shlex.split(self.raw_msg.strip())
+        except ValueError:
+            parts = self.raw_msg.strip().split()
+        self.name = parts[0].lstrip("/") if parts else ""
+        self.args = parts[1:]
 
 
 async def sync_group_card_for_all(ws_client: Any, user_id: int, card: str) -> None:
@@ -30,7 +58,7 @@ async def sync_group_card_for_all(ws_client: Any, user_id: int, card: str) -> No
 
 
 class GroupCommandHandler:
-    """群内命令分发路由器，使用字典映射表取代冗长的 if-elif 判断分支"""
+    """群内命令分发路由器"""
 
     def __init__(self, plugin: Any) -> None:
         self.plugin = plugin
@@ -62,59 +90,48 @@ class GroupCommandHandler:
             "reload": (self.cmd_reload, True, "重载 TOML 配置文件"),
         }
 
-    async def handle_command(self, ws_client: Any, user_id: int, raw_msg: str, display_name: str, group_id: int) -> None:
+    async def handle_command(self, ctx: CommandContext) -> None:
         """解析并路由单条群命令"""
-        # 使用 shlex 进行词法分词，支持双引号包含带空格的参数
-        try:
-            parts = shlex.split(raw_msg.strip())
-        except Exception:
-            parts = raw_msg.strip().split()
-
-        if not parts:
+        if not ctx.name:
             return
 
-        cmd_trigger = parts[0]
-        cmd_name = cmd_trigger[1:] if cmd_trigger.startswith("/") else cmd_trigger
-        args = parts[1:]
-
-        route = self.commands.get(cmd_name)
+        route = self.commands.get(ctx.name)
         if not route:
             # 未注册命令不做任何回复
             return
 
         handler_method, need_admin, desc = route
 
-        # 权限校验
-        is_admin = str(user_id) in self.plugin.config_manager.admins
+        is_admin = str(ctx.user_id) in self.plugin.config_manager.admins
         if need_admin and not is_admin:
             reply = "[错误] 该命令仅限管理员使用！"
-            await ws_client.send_group_message(group_id, f"@{display_name}\n{reply}")
+            await ctx.ws_client.send_group_message(ctx.group_id, f"@{ctx.display_name}\n{reply}")
             return
 
         try:
             # 执行命令并异步获取回复内容
-            reply = await handler_method(ws_client, user_id, args, group_id, display_name)
+            reply = await handler_method(ctx)
             if reply:
-                # 统一 At 消息回包
-                await ws_client.send_group_message(
-                    group_id,
+                # At 消息回包
+                await ctx.ws_client.send_group_message(
+                    ctx.group_id,
                     [
-                        {"type": "at", "data": {"qq": str(user_id)}},
+                        {"type": "at", "data": {"qq": str(ctx.user_id)}},
                         {"type": "text", "data": {"text": f"\n{reply}"}},
                     ],
                 )
         except Exception as e:
-            self.logger.error(f"群命令 /{cmd_name} 执行失败: {e}")
-            await ws_client.send_group_message(group_id, f"@{display_name}\n[错误] 指令执行失败: {e}")
+            self.logger.error(f"群命令 /{ctx.name} 执行失败: {e}")
+            await ctx.ws_client.send_group_message(ctx.group_id, f"@{ctx.display_name}\n[错误] 指令执行失败: {e}")
 
     # ================= 群指令具体业务处理方法 =================
 
-    async def cmd_help(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_help(self, ctx: CommandContext) -> str:
         """/help 命令"""
-        is_admin = str(user_id) in self.plugin.config_manager.admins
+        is_admin = str(ctx.user_id) in self.plugin.config_manager.admins
         return self.plugin.config_manager.get_help_text(is_admin)
 
-    async def cmd_list(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_list(self, ctx: CommandContext) -> str:
         """/list 命令"""
         online_players = self.plugin.server.online_players
         if not online_players:
@@ -132,7 +149,7 @@ class GroupCommandHandler:
 
         return "\n".join(lines)
 
-    async def cmd_tps(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_tps(self, ctx: CommandContext) -> str:
         """/tps 命令"""
         try:
             srv = self.plugin.server
@@ -150,7 +167,7 @@ class GroupCommandHandler:
             self.logger.error(f"获取 TPS 发生错误: {e}")
             return "[错误] 无法抓取服务器 TPS 性能数据"
 
-    async def cmd_info(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_info(self, ctx: CommandContext) -> str:
         """/info 命令"""
         try:
             from ..utils.system import get_system_info_dict
@@ -180,9 +197,9 @@ class GroupCommandHandler:
             self.logger.error(f"生成系统指标报告失败: {e}")
             return "[错误] 服务器信息生成失败"
 
-    async def cmd_bind(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_bind(self, ctx: CommandContext) -> str:
         """/bind 命令"""
-        qq_str = str(user_id)
+        qq_str = str(ctx.user_id)
         bound_player = self.plugin.data_manager.get_qq_player(qq_str)
         if not bound_player:
             return "您的 QQ 尚未绑定任何游戏角色。\n[引导] 请在游戏内输入 `/bindqq` 命令发起绑定流程。"
@@ -201,13 +218,13 @@ class GroupCommandHandler:
         )
         return reply
 
-    async def cmd_verify(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_verify(self, ctx: CommandContext) -> str:
         """/verify <验证码> 命令"""
-        if len(args) != 1:
+        if len(ctx.args) != 1:
             return "[错误] 用法: /verify <6位验证码>"
 
-        code = args[0]
-        qq_str = str(user_id)
+        code = ctx.args[0]
+        qq_str = str(ctx.user_id)
 
         if qq_str not in self.plugin.verification_manager.verification_codes:
             return "[错误] 未找到您的待验证申请，请先在游戏内使用 `/bindqq` 触发"
@@ -249,13 +266,13 @@ class GroupCommandHandler:
             return ""
         return f"[错误] {msg}"
 
-    async def cmd_bindqq(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_bindqq(self, ctx: CommandContext) -> str:
         """/bindqq <游戏名> <QQ> 快捷强制双向绑定命令（管理员专用）"""
-        if len(args) != 2:
+        if len(ctx.args) != 2:
             return "[错误] 用法: /bindqq <游戏内角色名称> <QQ号>"
 
-        player_name = args[0]
-        qq_str = args[1]
+        player_name = ctx.args[0]
+        qq_str = ctx.args[1]
 
         if not qq_str.isdigit():
             return "[失败] 错误的 QQ 号格式，QQ 号必须为纯数字"
@@ -299,63 +316,51 @@ class GroupCommandHandler:
         else:
             return f"[成功] 已成功将离线玩家 {player_name} 与 QQ {qq_str} 进行双向绑定！"
 
-    async def cmd_cmd(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_cmd(self, ctx: CommandContext) -> str:
         """/cmd <服务器命令> 命令"""
-        if not args:
+        if not ctx.args:
             return "[错误] 用法: /cmd <命令内容>"
 
-        cmd_str = " ".join(args)
-        cmd_str = html.unescape(cmd_str)
-
-        # 异步主线程同步结果获取 (非阻塞 Future 实现)
-        loop = asyncio.get_running_loop()
-        fut = loop.create_future()
-
+        cmd_str = html.unescape(" ".join(ctx.args))
+        fut = asyncio.get_running_loop().create_future()
         msg_outputs: list[str] = []
         err_outputs: list[str] = []
 
-        def execute_main() -> None:
-            try:
-                from endstone.command import CommandSenderWrapper
-
-                lang = self.plugin.server.language
-
-                def on_msg(m: Any) -> None:
-                    if isinstance(m, str):
-                        msg_outputs.append(m)
-                    else:
-                        msg_outputs.append(lang.translate(m, lang.locale))
-
-                def on_err(e: Any) -> None:
-                    if isinstance(e, str):
-                        err_outputs.append(e)
-                    else:
-                        err_outputs.append(lang.translate(e, lang.locale))
-
-                wrapper = CommandSenderWrapper(
-                    sender=self.plugin.server.command_sender,
-                    on_message=on_msg,
-                    on_error=on_err,
-                )
-
-                success = self.plugin.server.dispatch_command(wrapper, cmd_str)
-                loop.call_soon_threadsafe(fut.set_result, success)
-            except Exception as e:
-                loop.call_soon_threadsafe(fut.set_exception, e)
-
-        self.plugin.server.scheduler.run_task(self.plugin, execute_main, delay=0)
+        self.plugin.server.scheduler.run_task(
+            self.plugin, lambda: self._execute_console_command(cmd_str, fut, msg_outputs, err_outputs), delay=0
+        )
 
         try:
             # 10 秒防卡死超时控制
             success = await asyncio.wait_for(fut, timeout=10)
-            merged = msg_outputs + [f"[错误] {x}" for x in err_outputs]
-            output_text = "\n".join(merged) if merged else "指令已静默执行，无回显"
-            status = "成功" if success else "失败"
-            return f"控制台指令已执行: /{cmd_str}\n执行状态: {status}\n回显输出:\n{output_text}"
         except asyncio.TimeoutError:
             return "[错误] 执行超时"
         except Exception as e:
             return f"[错误] 执行失败: {e}"
+
+        merged = msg_outputs + [f"[错误] {x}" for x in err_outputs]
+        output_text = "\n".join(merged) if merged else "指令已静默执行，无回显"
+        status = "成功" if success else "失败"
+        return f"控制台指令已执行: /{cmd_str}\n执行状态: {status}\n回显输出:\n{output_text}"
+
+    def _execute_console_command(
+        self, cmd_str: str, fut: Any, msg_outputs: list[str], err_outputs: list[str]
+    ) -> None:
+        """在主线程执行控制台命令，并把回显与执行结果写回 Future"""
+        loop = fut.get_loop()
+        try:
+            from endstone.command import CommandSenderWrapper
+
+            lang = self.plugin.server.language
+            wrapper = CommandSenderWrapper(
+                sender=self.plugin.server.command_sender,
+                on_message=lambda m: msg_outputs.append(m if isinstance(m, str) else lang.translate(m, lang.locale)),
+                on_error=lambda e: err_outputs.append(e if isinstance(e, str) else lang.translate(e, lang.locale)),
+            )
+            success = self.plugin.server.dispatch_command(wrapper, cmd_str)
+            loop.call_soon_threadsafe(fut.set_result, success)
+        except Exception as e:
+            loop.call_soon_threadsafe(fut.set_exception, e)
 
     async def _resolve_target(self, input_str: str) -> tuple[str | None, str | None]:
         """解析搜索词为玩家 ID"""
@@ -378,12 +383,12 @@ class GroupCommandHandler:
 
         return None, None
 
-    async def cmd_check(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_check(self, ctx: CommandContext) -> str:
         """/check <角色名|QQ> 命令"""
-        if not args:
+        if not ctx.args:
             return "[错误] 用法: /check <玩家游戏名|QQ号>"
 
-        search_input = " ".join(args)
+        search_input = " ".join(ctx.args)
         target, match_type = await self._resolve_target(search_input)
 
         if not target:
@@ -408,18 +413,18 @@ class GroupCommandHandler:
         )
         return reply
 
-    async def cmd_unbindqq(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_unbindqq(self, ctx: CommandContext) -> str:
         """/unbindqq <角色名|QQ> 命令"""
-        if not args:
+        if not ctx.args:
             return "[错误] 用法: /unbindqq <玩家游戏名|QQ号>"
 
-        search_input = " ".join(args)
+        search_input = " ".join(ctx.args)
         target, _ = await self._resolve_target(search_input)
 
         if not target:
             return f"[错误] 未找到对应玩家 {search_input} 的绑定记录"
 
-        if self.plugin.data_manager.unbind_player_qq(target, display_name):
+        if self.plugin.data_manager.unbind_player_qq(target, ctx.display_name):
             # 主线程重置在线玩家权限
             def force_demote() -> None:
                 for p in self.plugin.server.online_players:
@@ -431,19 +436,19 @@ class GroupCommandHandler:
             return f"[成功] 已强行解除了玩家 {target} 的 QQ 绑定记录"
         return f"[失败] 玩家 {target} 并没有绑定 QQ"
 
-    async def cmd_ban(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_ban(self, ctx: CommandContext) -> str:
         """/ban <角色名|QQ> [原因] 命令"""
-        if not args:
+        if not ctx.args:
             return "[错误] 用法: /ban <玩家游戏名|QQ号> [封禁原因]"
 
-        search_input = args[0]
-        reason = " ".join(args[1:]) if len(args) > 1 else "管理员封禁"
+        search_input = ctx.args[0]
+        reason = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else "管理员封禁"
 
         target, _ = await self._resolve_target(search_input)
         if not target:
             return f"[错误] 未能在库中找到对应的角色: {search_input}"
 
-        self.plugin.data_manager.ban_player(target, display_name, reason)
+        self.plugin.data_manager.ban_player(target, ctx.display_name, reason)
 
         # 主线程踢出或拉起通知并降权
         def apply_ban() -> None:
@@ -451,42 +456,42 @@ class GroupCommandHandler:
                 if p.name == target:
                     # 踢出玩家或下发通知
                     self.plugin.permission_manager.set_player_visitor_permissions(p)
-                    self.plugin.permission_manager.send_ban_notification(p, reason, display_name, Timing.get_timestamp())
+                    self.plugin.permission_manager.send_ban_notification(p, reason, ctx.display_name, Timing.get_timestamp())
                     break
 
         self.plugin.server.scheduler.run_task(self.plugin, apply_ban, delay=1)
         return f"[成功] 已封禁玩家 {target} 的游戏功能并强制解绑其QQ，原因: {reason}"
 
-    async def cmd_unban(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_unban(self, ctx: CommandContext) -> str:
         """/unban <角色名|QQ> 命令"""
-        if not args:
+        if not ctx.args:
             return "[错误] 用法: /unban <玩家游戏名|QQ号>"
 
-        search_input = " ".join(args)
+        search_input = " ".join(ctx.args)
         target, _ = await self._resolve_target(search_input)
 
         if not target:
             return f"[错误] 未在库中定位到该角色: {search_input}"
 
-        if self.plugin.data_manager.unban_player(target, display_name):
+        if self.plugin.data_manager.unban_player(target, ctx.display_name):
             return f"[成功] 已解除玩家 {target} 的封禁限制"
         return f"[失败] 玩家 {target} 未处于被封禁状态"
 
-    async def cmd_banlist(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_banlist(self, ctx: CommandContext) -> str:
         """/banlist 命令"""
         bans = self.plugin.data_manager.get_banned_players()
         if not bans:
             return "当前服务器黑名单中没有任何封禁记录"
 
         lines = [f"封禁玩家列表 ({len(bans)}):"]
-        for b in bans[:15]:
+        for b in bans[:_BANLIST_LIMIT]:
             lines.append(f" • {b['name']} (原因: {b['ban_reason']} | 执行人: {b['ban_by']})")
-        if len(bans) > 15:
-            lines.append(f"... 还有 {len(bans) - 15} 个账号未列出")
+        if len(bans) > _BANLIST_LIMIT:
+            lines.append(f"... 还有 {len(bans) - _BANLIST_LIMIT} 个账号未列出")
 
         return "\n".join(lines)
 
-    async def cmd_tog_qq(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_tog_qq(self, ctx: CommandContext) -> str:
         """/tog_qq 命令"""
         curr = self.plugin.config_manager.enable_qq_to_game
         self.plugin.config_manager.enable_qq_to_game = not curr
@@ -494,7 +499,7 @@ class GroupCommandHandler:
         state = "开启" if not curr else "关闭"
         return f"QQ -> 游戏 的消息同步通道已 {state}"
 
-    async def cmd_tog_game(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_tog_game(self, ctx: CommandContext) -> str:
         """/tog_game 命令"""
         curr = self.plugin.config_manager.enable_game_to_qq
         self.plugin.config_manager.enable_game_to_qq = not curr
@@ -502,7 +507,7 @@ class GroupCommandHandler:
         state = "开启" if not curr else "关闭"
         return f"游戏 -> QQ 的消息同步通道已 {state}"
 
-    async def cmd_reload(self, ws_client: Any, user_id: int, args: list[str], group_id: int, display_name: str) -> str:
+    async def cmd_reload(self, ctx: CommandContext) -> str:
         """/reload 命令"""
         if self.plugin.config_manager.reload_config():
             return "[成功] 配置文件 config.toml 已成功重新加载"

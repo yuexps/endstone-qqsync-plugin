@@ -14,13 +14,25 @@ from .core import Config, Data, Permissions, UI, Verification, Events
 from .qq import WebSocketClient, GroupCommandHandler
 from .utils import MessagePipeline
 
+# Endstone 调度 tick 换算：20 tick = 1 秒
+_TICKS_PER_SECOND = 20
+# 验证码发送队列出队周期：3 秒
+_SEND_QUEUE_PERIOD_TICKS = 3 * _TICKS_PER_SECOND
+# 定时任务启动延迟：60 秒
+_INITIAL_DELAY_TICKS = 60 * _TICKS_PER_SECOND
+# 在线计时器增量结算周期：60 秒
+_PLAYTIME_TIMER_PERIOD_TICKS = 60 * _TICKS_PER_SECOND
+# 过期数据自愈清理周期：5 分钟
+_CLEANUP_PERIOD_TICKS = 5 * 60 * _TICKS_PER_SECOND
+# 群成员缓存拉取周期：1 小时
+_GROUP_CACHE_PERIOD_TICKS = 60 * 60 * _TICKS_PER_SECOND
+
 
 class qqsync(Plugin):
     """QQsync群服互通插件主类"""
 
     api_version = "0.11"
 
-    # 注册指令
     commands = {
         "bindqq": {
             "description": "QQ绑定相关命令",
@@ -190,7 +202,7 @@ class qqsync(Plugin):
             # 4. 建立 WebSocket 子线程长连接
             self._init_websocket_connection()
 
-            welcome_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已成功激活！欢迎使用。{ColorFormat.RESET}"
+            welcome_msg = f"{ColorFormat.GREEN}qqsync_plugin {ColorFormat.YELLOW}已激活{ColorFormat.RESET}"
             self.logger.info(welcome_msg)
         except Exception as e:
             self.logger.error(f"插件启用遭遇致命错误: {e}")
@@ -200,7 +212,7 @@ class qqsync(Plugin):
         """初始化全部管理模块并保持向后属性兼容"""
         self.config_manager = Config(Path(self.data_folder), self.logger)
 
-        # 数据库持久层
+        # 数据存储层
         self.data_manager = Data(self, Path(self.data_folder), self.logger)
 
         # 验证风控层
@@ -251,32 +263,32 @@ class qqsync(Plugin):
         self.server.scheduler.run_task(
             self,
             self.verification_manager.process_verification_send_queue,
-            delay=60,
-            period=60,
+            delay=_SEND_QUEUE_PERIOD_TICKS,
+            period=_SEND_QUEUE_PERIOD_TICKS,
         )
 
         # 2. 在线计时器增量结算（每60秒，1200tick）
         self.server.scheduler.run_task(
             self,
             self._update_online_playtime_timers,
-            delay=1200,
-            period=1200,
+            delay=_INITIAL_DELAY_TICKS,
+            period=_PLAYTIME_TIMER_PERIOD_TICKS,
         )
 
         # 3. 超时过期数据自愈清理（每5分钟，6000tick）
         self.server.scheduler.run_task(
             self,
             self._cleanup_expired_data,
-            delay=1200,
-            period=6000,
+            delay=_INITIAL_DELAY_TICKS,
+            period=_CLEANUP_PERIOD_TICKS,
         )
 
         # 4. 强制加退群成员列表缓存拉取（每小时，72000tick）
         self.server.scheduler.run_task(
             self,
             self._update_group_members,
-            delay=1200,
-            period=72000,
+            delay=_INITIAL_DELAY_TICKS,
+            period=_GROUP_CACHE_PERIOD_TICKS,
         )
 
     def _update_online_playtime_timers(self) -> None:
@@ -290,16 +302,17 @@ class qqsync(Plugin):
         """定时任务回调：清理已退线玩家的临时数据与缓存文件"""
         try:
             self.verification_manager.cleanup_expired_verifications()
-
-            online_names = {p.name for p in self.server.online_players}
-            # 回收已离线角色的临时资源与权限附件挂载点，防止长效服内存泄露
-            for name in list(self.permission_manager.attachment_cache.keys()):
-                if name not in online_names:
-                    self.permission_manager.cleanup_player_permissions(name)
-                    self.verification_manager.cleanup_player_data(name)
-
+            self._cleanup_offline_players()
         except Exception as e:
             self.logger.error(f"清理过期系统数据失败: {e}")
+
+    def _cleanup_offline_players(self) -> None:
+        """回收已离线角色的临时资源与权限附件"""
+        online_names = {p.name for p in self.server.online_players}
+        for name in list(self.permission_manager.attachment_cache.keys()):
+            if name not in online_names:
+                self.permission_manager.cleanup_player_permissions(name)
+                self.verification_manager.cleanup_player_data(name)
 
     def _update_group_members(self) -> None:
         """定时任务回调：从 OneBot 主动刷新群成员列表"""
@@ -335,27 +348,7 @@ class qqsync(Plugin):
                 sender.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}此命令仅限游戏内玩家使用！{ColorFormat.RESET}")
                 return True
 
-            player = sender
-            player_name = player.name
-
-            # 已经绑定成功
-            if self.data_manager.is_player_bound(player_name, player.xuid):
-                qq = self.data_manager.get_player_qq(player_name, player.xuid)
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}账号状态：已绑定 QQ ({qq}){ColorFormat.RESET}")
-                player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}如需解绑，请联系管理员处理{ColorFormat.RESET}")
-            else:
-                if self.config_manager.force_bind_qq:
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}您尚未绑定 QQ 账号，正在加载绑定表单...{ColorFormat.RESET}")
-                    # 延时 5 个 tick 避开聊天发送冲突，弹出绑定 UI
-                    self.server.scheduler.run_task(
-                        self,
-                        lambda p=player: self.ui_manager.show_qq_binding_form(p)
-                        if self.is_valid_player(p)
-                        else None,
-                        delay=5,
-                    )
-                else:
-                    player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}强制绑定 QQ 校验当前已在 TOML 配置中关闭。{ColorFormat.RESET}")
+            self._show_binding_state(sender)
             return True
         except Exception as e:
             self.logger.error(f"执行 /bindqq 命令失败: {e}")
@@ -363,8 +356,29 @@ class qqsync(Plugin):
                 sender.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}指令执行内部出错，请重试{ColorFormat.RESET}")
             return False
 
+    def _show_binding_state(self, player: Any) -> None:
+        """按绑定状态向玩家回执账号信息或拉起绑定表单"""
+        player_name = player.name
+        if self.data_manager.is_player_bound(player_name, player.xuid):
+            qq = self.data_manager.get_player_qq(player_name, player.xuid)
+            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.GREEN}账号状态：已绑定 QQ ({qq}){ColorFormat.RESET}")
+            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}如需解绑，请联系管理员处理{ColorFormat.RESET}")
+            return
+
+        if not self.config_manager.force_bind_qq:
+            player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}强制绑定 QQ 校验当前已在 TOML 配置中关闭。{ColorFormat.RESET}")
+            return
+
+        player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.YELLOW}您尚未绑定 QQ 账号，正在加载绑定表单...{ColorFormat.RESET}")
+        # 延时 5 个 tick 避开聊天发送冲突，弹出绑定 UI
+        self.server.scheduler.run_task(
+            self,
+            lambda p=player: self.ui_manager.show_qq_binding_form(p) if self.is_valid_player(p) else None,
+            delay=5,
+        )
+
     def is_valid_player(self, player: Any) -> bool:
-        """安全核验玩家对象在线且合法性"""
+        """校验玩家对象在线且有效"""
         try:
             return bool(
                 player
@@ -381,75 +395,80 @@ class qqsync(Plugin):
         if not self.config_manager.api_qq_enable:
             return False
 
-        if group_id is not None:
-            configured_group_ids = {g["id"] for g in self.config_manager.groups}
-            if group_id not in configured_group_ids:
-                return False
+        if group_id is not None and group_id not in {g["id"] for g in self.config_manager.groups}:
+            return False
+
+        if not (self.ws_client and self.ws_client.is_connected):
+            return False
 
         try:
-            if self.ws_client and self.ws_client.is_connected:
-                if group_id is not None:
-                    asyncio.run_coroutine_threadsafe(
-                        self.ws_client.send_group_message(group_id, text),
-                        self._loop,
-                    )
-                else:
-                    asyncio.run_coroutine_threadsafe(
-                        self.ws_client.broadcast_to_groups(text),
-                        self._loop,
-                    )
-                return True
-        except Exception:
-            pass
+            if group_id is not None:
+                asyncio.run_coroutine_threadsafe(self.ws_client.send_group_message(group_id, text), self._loop)
+            else:
+                asyncio.run_coroutine_threadsafe(self.ws_client.broadcast_to_groups(text), self._loop)
+            return True
+        except Exception as e:
+            self.logger.debug(f"发送 QQ 消息失败: {e}")
         return False
 
     def on_disable(self) -> None:
-        """插件卸载生命周期接口：安全关闭连接，结算计时数据入库"""
+        """卸载生命周期：关闭连接并结算计时数据"""
         try:
-            self.logger.info("正在安全禁用并卸载 qqsync_plugin...")
+            self.logger.info("正在禁用 qqsync_plugin...")
 
             # 1. 广播服务器停止通知
-            if self.ws_client and self.ws_client.is_connected:
-                try:
-                    fut = asyncio.run_coroutine_threadsafe(
-                        self.ws_client.broadcast_to_groups("[QQSync] 游戏服务器已停止运行！"),
-                        self._loop,
-                    )
-                    # 强阻塞3秒等待发送回执
-                    fut.result(timeout=3)
-                except Exception:
-                    pass
+            self._notify_server_stop()
 
             # 2. 结算全部在线玩家时长统计，并批量回写 SQLite
             if hasattr(self, "data_manager"):
                 self.data_manager.cleanup_timer_system()
                 self.data_manager.save_data()
+                self.data_manager.close()
 
-            # 3. 关闭 WebSocket 网络层与缓冲区写协程
-            if hasattr(self, "ws_client") and self.ws_client:
-                self.ws_client.stop()
-
-            # 4. 彻底注销子线程事件循环
-            if hasattr(self, "_loop") and self._loop:
-                try:
-                    if not self._loop.is_closed():
-                        if self._loop.is_running():
-                            self._loop.call_soon_threadsafe(self._loop.stop)
-                except Exception:
-                    pass
-
-                # 等待线程安全收尾
-                if hasattr(self, "_thread") and self._thread and self._thread.is_alive():
-                    try:
-                        self._thread.join(timeout=5)
-                    except Exception:
-                        pass
-
-                try:
-                    self._loop.close()
-                except Exception:
-                    pass
+            # 3. 关闭网络层并注销子线程事件循环
+            self._shutdown_network_layer()
 
             self.logger.info(f"{ColorFormat.YELLOW}qqsync_plugin 卸载清理完成。{ColorFormat.RESET}")
         except Exception as e:
             self.logger.error(f"插件卸载回收资源失败: {e}")
+
+    def _notify_server_stop(self) -> None:
+        """向所有群组广播服务器停止通知"""
+        if not (self.ws_client and self.ws_client.is_connected):
+            return
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self.ws_client.broadcast_to_groups("[QQSync] 游戏服务器已停止运行！"),
+                self._loop,
+            )
+            # 强阻塞3秒等待发送回执
+            fut.result(timeout=3)
+        except Exception as e:
+            self.logger.warning(f"广播服务器停止通知失败: {e}")
+
+    def _shutdown_network_layer(self) -> None:
+        """关闭 WebSocket 网络层与缓冲区写协程，并注销子线程事件循环"""
+        if hasattr(self, "ws_client") and self.ws_client:
+            self.ws_client.stop()
+
+        if not (hasattr(self, "_loop") and self._loop):
+            return
+
+        try:
+            if not self._loop.is_closed() and self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+        except Exception as e:
+            self.logger.debug(f"通知事件循环退出失败: {e}")
+
+        # 等待网络线程退出
+        if hasattr(self, "_thread") and self._thread and self._thread.is_alive():
+            try:
+                self._thread.join(timeout=5)
+            except Exception as e:
+                self.logger.debug(f"等待网络线程退出失败: {e}")
+
+        try:
+            self._loop.close()
+        except Exception as e:
+            self.logger.debug(f"关闭事件循环失败: {e}")

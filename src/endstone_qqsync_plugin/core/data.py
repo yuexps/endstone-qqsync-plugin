@@ -7,6 +7,7 @@ import sqlite3
 import threading
 from typing import Any
 from ..utils.timing import Timing
+from ..utils.helpers import is_valid_qq_number
 
 # players 表业务字段（不含自增主键 id）
 _PLAYER_COLUMNS = (
@@ -45,7 +46,7 @@ _INSERT_PLAYER_SQL = (
 
 
 class Data:
-    """提供基于 SQLite3 的高可靠、线程安全的游戏统计与绑定持久化"""
+    """SQLite3 玩家绑定与游玩统计存储"""
 
     def __init__(self, plugin: Any, data_folder: Path, logger: Any) -> None:
         self.plugin = plugin
@@ -53,21 +54,36 @@ class Data:
         self.logger = logger
         self.db_file = data_folder / "data.db"
 
-        # 并发锁，确保主游戏线程与网络异步线程的写事务绝对互斥
+        # 串行化主游戏线程与网络线程的数据库写入
         self._lock = threading.Lock()
+        # 复用的 SQLite 连接，避免每次读写都重新打开数据库文件
+        self._conn: sqlite3.Connection | None = None
 
         # 在线玩家计时缓存：身份键(XUID，未知时退回玩家名) -> (玩家记录 id, 本次计时起点)
         self._online_timers: dict[str, tuple[int, int]] = {}
-        # 在线玩家单次会话绝对开始时间缓存：身份键 -> 时间戳
+        # 单次会话开始时间缓存：身份键 -> 时间戳
         self._session_start_times: dict[str, int] = {}
         self._last_timer_update: int = Timing.get_timestamp()
 
         self._init_db()
 
-    def _execute_write(self, sql: str, params: tuple = ()) -> int | None:
-        """线程安全的 SQL 写操作事务，返回自增主键（非插入语句为 None）"""
+    def _get_connection(self) -> sqlite3.Connection:
+        """获取复用的数据库连接（调用方需自行持有并发锁）"""
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_file, check_same_thread=False)
+        return self._conn
+
+    def close(self) -> None:
+        """关闭复用的数据库连接"""
         with self._lock:
-            conn = sqlite3.connect(self.db_file, check_same_thread=False)
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
+    def _execute_write(self, sql: str, params: tuple = ()) -> int | None:
+        """加锁执行 SQL 写入事务，返回自增主键（非插入语句为 None）"""
+        with self._lock:
+            conn = self._get_connection()
             try:
                 cursor = conn.execute(sql, params)
                 conn.commit()
@@ -76,49 +92,47 @@ class Data:
                 conn.rollback()
                 self.logger.error(f"SQL写入失败: {sql}, 错误: {e}")
                 raise e
-            finally:
-                conn.close()
 
     def _execute_read(self, sql: str, params: tuple = ()) -> list[tuple]:
-        """线程安全的 SQL 读操作"""
+        """加锁执行 SQL 查询"""
         with self._lock:
-            conn = sqlite3.connect(self.db_file, check_same_thread=False)
             try:
-                cursor = conn.cursor()
+                cursor = self._get_connection().cursor()
                 cursor.execute(sql, params)
                 return cursor.fetchall()
             except Exception as e:
                 self.logger.error(f"SQL读取失败: {sql}, 错误: {e}")
                 raise e
-            finally:
-                conn.close()
 
     def _init_db(self) -> None:
         """初始化 SQLite 数据库及对应表结构"""
         self.db_file.parent.mkdir(parents=True, exist_ok=True)
+        # 需在建立连接前判断，连接会顺带创建空文件
+        is_existing_database = self.db_file.exists() and self.db_file.stat().st_size > 0
         self._migrate_schema()
         self._execute_write(_CREATE_PLAYERS_SQL)
-        # XUID 是玩家的稳定身份键；玩家名可变，仅作展示与查询字段
+        # XUID 为身份键；玩家名可变，仅作展示与查询
         self._execute_write("CREATE UNIQUE INDEX IF NOT EXISTS idx_players_xuid ON players(xuid)")
         self._execute_write("CREATE INDEX IF NOT EXISTS idx_players_name ON players(player_name)")
-        self.logger.info("SQLite 数据库初始化完成")
+        self.logger.info("SQLite 数据库已就绪" if is_existing_database else "SQLite 数据库已创建")
 
     @staticmethod
     def _normalize_xuid(xuid: Any) -> str | None:
-        """统一空 XUID 为 NULL，避免唯一索引把未知 XUID 视为同一身份"""
+        """空 XUID 存为 NULL，避免唯一索引把未知 XUID 视为同一身份"""
         text = str(xuid).strip() if xuid else ""
         return text or None
 
     def _migrate_schema(self) -> None:
         """将旧版以 player_name 为主键的表结构迁移为 id 主键 + XUID 唯一索引"""
-        columns = self._execute_read("PRAGMA table_info(players)")
-        if not columns or any(column[1] == "id" for column in columns):
-            return
+        with sqlite3.connect(self.db_file) as conn:
+            columns = conn.execute("PRAGMA table_info(players)").fetchall()
+            if not columns or any(column[1] == "id" for column in columns):
+                return
 
-        self.logger.info("检测到旧版 players 表结构，开始迁移为 XUID 身份模型...")
-        legacy_rows = self._execute_read(
-            f"SELECT rowid, {_PLAYER_COLUMNS} FROM players ORDER BY rowid"
-        )
+            self.logger.info("检测到旧版 players 表结构，开始迁移为 XUID 身份模型...")
+            legacy_rows = conn.execute(
+                f"SELECT rowid, {_PLAYER_COLUMNS} FROM players ORDER BY rowid"
+            ).fetchall()
         merged_rows = self._merge_legacy_rows(legacy_rows)
 
         with self._lock:
@@ -198,26 +212,34 @@ class Data:
 
     @staticmethod
     def _row_to_dict(row: tuple) -> dict[str, Any]:
-        """按 players 字段顺序把数据行转换为业务字典"""
+        """按 players 字段名把数据行转换为业务字典"""
+        raw = dict(zip(_PLAYER_FIELDS, row))
         return {
-            "name": row[0],
-            "xuid": row[1] or "",
-            "qq": row[2] or "",
-            "bind_time": row[3],
-            "rebind_time": row[4],
-            "unbind_time": row[5],
-            "unbind_by": row[6] or "",
-            "original_qq": row[7] or "",
-            "previous_qq": row[8] or "",
-            "total_playtime": row[9] or 0,
-            "session_count": row[10] or 0,
-            "last_join_time": row[11],
-            "last_quit_time": row[12],
-            "is_banned": bool(row[13]),
-            "ban_time": row[14],
-            "ban_by": row[15] or "",
-            "ban_reason": row[16] or "",
+            "name": raw["player_name"],
+            "xuid": raw["xuid"] or "",
+            "qq": raw["qq"] or "",
+            "bind_time": raw["bind_time"],
+            "rebind_time": raw["rebind_time"],
+            "unbind_time": raw["unbind_time"],
+            "unbind_by": raw["unbind_by"] or "",
+            "original_qq": raw["original_qq"] or "",
+            "previous_qq": raw["previous_qq"] or "",
+            "total_playtime": raw["total_playtime"] or 0,
+            "session_count": raw["session_count"] or 0,
+            "last_join_time": raw["last_join_time"],
+            "last_quit_time": raw["last_quit_time"],
+            "is_banned": bool(raw["is_banned"]),
+            "ban_time": raw["ban_time"],
+            "ban_by": raw["ban_by"] or "",
+            "ban_reason": raw["ban_reason"] or "",
         }
+
+    def _get_player_dict(self, player_name: str) -> dict[str, Any]:
+        """按玩家名读取单条记录的业务字典"""
+        rows = self._execute_read(
+            f"SELECT {_PLAYER_COLUMNS} FROM players WHERE player_name = ? LIMIT 1", (player_name,)
+        )
+        return self._row_to_dict(rows[0]) if rows else {}
 
     @property
     def binding_data(self) -> dict[str, dict[str, Any]]:
@@ -290,9 +312,9 @@ class Data:
         return self._row_to_dict(rows[0]) if rows else {}
 
     def bind_player_qq(self, player_name: str, player_xuid: str, qq_number: str) -> bool:
-        """将玩家角色与QQ进行持久化绑定"""
+        """绑定玩家角色与 QQ"""
         qq_clean = qq_number.strip()
-        if not qq_clean.isdigit() or not (5 <= len(qq_clean) <= 11):
+        if not is_valid_qq_number(qq_clean):
             return False
 
         xuid = self._normalize_xuid(player_xuid)
@@ -305,7 +327,6 @@ class Data:
         if record:
             record_id, old_qq = record[0], record[3]
             if old_qq and old_qq.strip():
-                # 重新绑定
                 self._execute_write(
                     """
                     UPDATE players SET qq = ?, xuid = ?, rebind_time = ?, previous_qq = ?
@@ -323,7 +344,6 @@ class Data:
                     (qq_clean, xuid, now, record_id),
                 )
         else:
-            # 全新记录
             self._execute_write(
                 """
                 INSERT INTO players (player_name, xuid, qq, bind_time, total_playtime, session_count)
@@ -414,7 +434,7 @@ class Data:
         self, player_name: str, online_players: list[Any], player_xuid: str | None = None
     ) -> dict[str, Any]:
         """获取玩家当前在线时长的结算与绑定历史结构数据"""
-        data = self.binding_data.get(player_name)
+        data = self._get_player_dict(player_name)
         if not data:
             return {}
 
@@ -484,7 +504,6 @@ class Data:
         if not res or not res[0][0]:
             return False
 
-        now = Timing.get_timestamp()
         self._execute_write(
             """
             UPDATE players SET is_banned = 0, ban_time = NULL, ban_by = NULL, ban_reason = NULL
@@ -507,77 +526,7 @@ class Data:
             for r in rows
         ]
 
-    def get_player_binding_history(self, player_name: str) -> dict[str, Any]:
-        """获取玩家当前绑定的分类历史字典数据"""
-        data = self.binding_data.get(player_name)
-        if not data:
-            return {}
 
-        is_bound = bool(data.get("qq", "").strip())
-        history = {
-            "current_qq": data.get("qq", ""),
-            "is_bound": is_bound,
-            "bind_time": data.get("bind_time"),
-            "unbind_time": data.get("unbind_time"),
-            "rebind_time": data.get("rebind_time"),
-            "unbind_by": data.get("unbind_by"),
-            "original_qq": data.get("original_qq"),
-            "previous_qq": data.get("previous_qq"),
-            "total_playtime": data.get("total_playtime", 0),
-            "session_count": data.get("session_count", 0),
-        }
-
-        if is_bound:
-            history["status"] = "重新绑定" if data.get("rebind_time") else "已绑定"
-        else:
-            history["status"] = "已解绑" if data.get("unbind_time") else "从未绑定"
-
-        return history
-
-    def get_complete_player_binding_status(self, player_name: str, player_xuid: str) -> dict[str, Any]:
-        """双向核验玩家绑定数据一致性"""
-        result = {
-            "is_bound": False,
-            "qq_number": "",
-            "binding_source": "",
-            "data_consistent": True,
-            "issues": [],
-        }
-
-        # 1. 查找玩家名下的绑定
-        res_name = self._execute_read("SELECT qq FROM players WHERE player_name = ?", (player_name,))
-        name_qq = res_name[0][0] if res_name else ""
-        name_bound = bool(name_qq and name_qq.strip())
-
-        # 2. 查找 XUID 名下的绑定
-        res_xuid = self._execute_read("SELECT qq, player_name FROM players WHERE xuid = ?", (player_xuid,))
-        xuid_qq = res_xuid[0][0] if res_xuid else ""
-        xuid_bound = bool(xuid_qq and xuid_qq.strip())
-
-        if name_bound and xuid_bound:
-            if name_qq == xuid_qq:
-                result["is_bound"] = True
-                result["qq_number"] = name_qq
-                result["binding_source"] = "both"
-            else:
-                result["is_bound"] = False
-                result["data_consistent"] = False
-                result["issues"].append(f"QQ号不一致: 玩家名对应 {name_qq}, XUID对应 {xuid_qq}")
-        elif name_bound:
-            result["is_bound"] = True
-            result["qq_number"] = name_qq
-            result["binding_source"] = "name"
-            result["issues"].append("仅玩家名绑定，XUID无关联数据")
-        elif xuid_bound:
-            result["is_bound"] = True
-            result["qq_number"] = xuid_qq
-            result["binding_source"] = "xuid"
-            result["issues"].append("仅XUID绑定，当前游戏ID无关联数据")
-        else:
-            result["is_bound"] = False
-            result["binding_source"] = "none"
-
-        return result
 
     # ================= 定时任务计时系统 =================
 
@@ -644,7 +593,7 @@ class Data:
         self._session_start_times.pop(key, None)
 
     def get_session_start_time(self, player_name: str, player_xuid: str | None = None) -> int | None:
-        """获取玩家本次会话的绝对开始时间"""
+        """获取玩家本次会话的开始时间"""
         key = self._identity_key(player_name, player_xuid)
         start_time = self._session_start_times.get(key)
         if start_time is None:
@@ -654,25 +603,30 @@ class Data:
     def update_online_timers(self, online_players: list[Any]) -> None:
         """每分钟自愈结算：增加新在线角色的累时，剔除离线角色的计时"""
         now = Timing.get_timestamp()
-        active_keys = set()
+        active_keys: set[str] = set()
 
-        for p in online_players:
-            if hasattr(p, "name") and hasattr(p, "xuid"):
-                key = self._identity_key(p.name, p.xuid)
-                active_keys.add(key)
-                # 对新增上线角色开启计时
-                if key not in self._online_timers:
-                    self.start_player_timer(p.name, p.xuid)
+        for player in online_players:
+            self._track_online_player(player, active_keys)
 
         # 收集并结算已离线角色的时长
         offline_keys = [key for key in self._online_timers if key not in active_keys]
         for key in offline_keys:
             self._settle_timer(key)
 
-        # 每 5 分钟（300秒）将当前在线玩家已累积的时长安全同步落盘一次
+        # 每 5 分钟（300秒）将在线玩家的累计时长落盘一次
         if now - self._last_timer_update >= 300:
             self._save_timer_progress()
             self._last_timer_update = now
+
+    def _track_online_player(self, player: Any, active_keys: set[str]) -> None:
+        """登记在线玩家身份，并对新增上线角色启动计时"""
+        if not (hasattr(player, "name") and hasattr(player, "xuid")):
+            return
+
+        key = self._identity_key(player.name, player.xuid)
+        active_keys.add(key)
+        if key not in self._online_timers:
+            self.start_player_timer(player.name, player.xuid)
 
     def _save_timer_progress(self) -> None:
         """批量同步当前在线未下线角色的部分累计时长进库"""
@@ -693,7 +647,7 @@ class Data:
         if self._online_timers:
             for key in list(self._online_timers.keys()):
                 self._settle_timer(key)
-            self.logger.info("在线计时器已全部安全离线结算")
+            self.logger.info("在线计时器已全部结算")
 
     def save_data(self) -> None:
         """向后兼容存盘接口（SQLite3 每次写入即落盘，此方法中仅保存当前计时进度）"""

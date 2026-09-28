@@ -7,9 +7,18 @@ import random
 from typing import Any
 from ..utils.timing import Timing
 
+# 验证码长度与取值范围
+VERIFICATION_CODE_LENGTH = 6
+_CODE_MIN = 10 ** (VERIFICATION_CODE_LENGTH - 1)
+_CODE_MAX = 10 ** VERIFICATION_CODE_LENGTH - 1
+# 全服并发绑定上限
+_MAX_CONCURRENT_BINDINGS = 25
+# 待确认与风控冷却缓存有效期（秒）
+_CACHE_TTL_SECONDS = 600
+
 
 class Verification:
-    """负责验证码生命周期、防抖频控发送队列、绑定频次限制以及消息撤回逻辑"""
+    """验证码生命周期、发送队列、频控与消息撤回"""
 
     def __init__(self, plugin: Any, logger: Any) -> None:
         self.plugin = plugin
@@ -29,7 +38,7 @@ class Verification:
 
         # 发送处理队列
         self.verification_send_queue: list[tuple[Any, str, str, str, int, float]] = []
-        self.max_concurrent_bindings = 25
+        self.max_concurrent_bindings = _MAX_CONCURRENT_BINDINGS
         self.binding_cooldown = 10
         self.max_verification_retries = 3
         self.verification_send_interval = 2.0
@@ -74,7 +83,7 @@ class Verification:
         self.verification_queue[qq_number] = now
         self.concurrent_bindings.add(player_name)
 
-        # 自动回收超过 5 分钟的冗余过期尝试记录，防止缓存泄露
+        # 回收超过 5 分钟的过期尝试记录
         expired = [qq for qq, t in self.verification_queue.items() if now - t > 300]
         for qq in expired:
             self.verification_queue.pop(qq, None)
@@ -117,7 +126,7 @@ class Verification:
 
             now = Timing.get_timestamp()
             self.player_bind_attempts[player.name] = now
-            code = str(random.randint(100000, 999999))
+            code = str(random.randint(_CODE_MIN, _CODE_MAX))
 
             self.pending_verifications[player.name] = {
                 "qq": qq_number,
@@ -153,7 +162,7 @@ class Verification:
         校验验证码
 
         Returns:
-            tuple[bool, str, dict]: (是否成功, 回馈描述, 待确认绑定字典)
+            tuple[bool, str, dict]: (是否通过, 回馈描述, 待确认绑定字典)
         """
         if player_name not in self.pending_verifications:
             return False, "验证请求已过期或不存在，请重新使用 /bindqq 开始绑定", {}
@@ -172,67 +181,74 @@ class Verification:
             self.verification_codes.pop(qq_number, None)
             return False, "验证码已过期，请重新申请", {}
 
-        if not input_code or not input_code.isdigit() or len(input_code) != 6:
+        if not input_code or not input_code.isdigit() or len(input_code) != VERIFICATION_CODE_LENGTH:
             return False, "请输入格式正确的 6 位纯数字验证码！", {}
 
         if input_code == pending["code"]:
-            # 使用过的一键销毁
-            if qq_number in self.verification_codes and self.verification_codes[qq_number].get("used", False):
-                return False, "验证码已被激活使用，请重新申请", {}
+            return self._activate_verification(player_name, qq_number, pending)
+        return self._reject_verification_attempt(player_name, qq_number, now)
 
-            if qq_number in self.verification_codes:
-                self.verification_codes[qq_number]["used"] = True
+    def _activate_verification(self, player_name: str, qq_number: str, pending: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+        """核验通过：标记验证码已用并调度撤回与群播报"""
+        # 已使用，立即销毁
+        if qq_number in self.verification_codes and self.verification_codes[qq_number].get("used", False):
+            return False, "验证码已被激活使用，请重新申请", {}
 
-            # 异步调度删除QQ消息和广播通知
-            def on_success() -> None:
-                if self.plugin.ws_client and self.plugin.ws_client.is_connected:
-                    asyncio.run_coroutine_threadsafe(
-                        self._handle_verification_success(player_name, qq_number),
-                        self.plugin._loop,
-                    )
+        if qq_number in self.verification_codes:
+            self.verification_codes[qq_number]["used"] = True
 
-            self.plugin.server.scheduler.run_task(self.plugin, on_success, delay=1)
+        # 异步调度删除QQ消息和广播通知
+        self._schedule_ws_coroutine(self._handle_verification_success, player_name, qq_number)
 
-            # 数据清除
-            self.pending_verifications.pop(player_name, None)
-            self.verification_codes.pop(qq_number, None)
-            self.unified_verification_attempts.pop(f"attempts:{player_name}:{qq_number}", None)
+        self.pending_verifications.pop(player_name, None)
+        self.verification_codes.pop(qq_number, None)
+        self.unified_verification_attempts.pop(f"attempts:{player_name}:{qq_number}", None)
 
-            return True, "验证成功", pending
-        else:
-            # 错误次数扣减
-            key = f"attempts:{player_name}:{qq_number}"
-            attempts = self.unified_verification_attempts.get(key, 0) + 1
-            self.unified_verification_attempts[key] = attempts
+        return True, "验证成功", pending
 
-            remaining = 3 - attempts
-            if remaining > 0:
-                return False, f"验证码输入错误！您还有 {remaining} 次重试机会", {}
+    def _reject_verification_attempt(self, player_name: str, qq_number: str, now: float) -> tuple[bool, str, dict[str, Any]]:
+        """核验失败：累计错误次数并按需施加冷却风控"""
+        # 错误次数扣减
+        key = f"attempts:{player_name}:{qq_number}"
+        attempts = self.unified_verification_attempts.get(key, 0) + 1
+        self.unified_verification_attempts[key] = attempts
 
-            # 次数用尽，彻底锁定并清除
-            self.pending_verifications.pop(player_name, None)
-            self.verification_codes.pop(qq_number, None)
-            self.unified_verification_attempts.pop(key, None)
+        remaining = 3 - attempts
+        if remaining > 0:
+            return False, f"验证码输入错误！您还有 {remaining} 次重试机会", {}
 
-            # 触发撤回
-            def on_fail_lock() -> None:
-                if self.plugin.ws_client and self.plugin.ws_client.is_connected:
-                    asyncio.run_coroutine_threadsafe(
-                        self._delete_verification_message(qq_number),
-                        self.plugin._loop,
-                    )
+        # 次数用尽，彻底锁定并清除
+        self.pending_verifications.pop(player_name, None)
+        self.verification_codes.pop(qq_number, None)
+        self.unified_verification_attempts.pop(key, None)
 
-            self.plugin.server.scheduler.run_task(self.plugin, on_fail_lock, delay=1)
+        self._schedule_ws_coroutine(self._delete_verification_message, qq_number)
 
-            # 触发冷却锁
-            self.player_verification_cooldown[player_name] = now
-            self.binding_rate_limit[qq_number] = now
+        # 触发冷却锁
+        self.player_verification_cooldown[player_name] = now
+        self.binding_rate_limit[qq_number] = now
 
-            return False, "验证码重试次数已达上限，系统已对您施加60秒申请风控锁定", {}
+        return False, "验证码重试次数已达上限，系统已对您施加60秒申请风控锁定", {}
+
+    def _schedule_ws_coroutine(self, coro_func: Any, *args: Any) -> None:
+        """延迟 1 tick 在主线程调度 WebSocket 协程"""
+        def run_task() -> None:
+            if self.plugin.ws_client and self.plugin.ws_client.is_connected:
+                asyncio.run_coroutine_threadsafe(coro_func(*args), self.plugin._loop)
+
+        self.plugin.server.scheduler.run_task(self.plugin, run_task, delay=1)
 
     def cleanup_expired_verifications(self) -> None:
         """清理已超时过期的挂起绑定验证码和已发送的消息撤回"""
         now = Timing.get_timestamp()
+        self._cleanup_expired_pending(now)
+        self._retract_expired_messages(now)
+
+        # 清理其它缓存
+        self._cleanup_expired_caches(now)
+
+    def _cleanup_expired_pending(self, now: float) -> None:
+        """回收超过有效期玩家验证码与QQ验证码"""
         expired_players = [p for p, d in self.pending_verifications.items() if now - d["timestamp"] > 60]
         expired_qqs = [qq for qq, d in self.verification_codes.items() if now - d["timestamp"] > 60]
 
@@ -244,33 +260,40 @@ class Verification:
             self.verification_codes.pop(qq, None)
             self.logger.debug(f"回收QQ过期验证码: {qq}")
 
-        # 收集需要撤回的消息
+    def _retract_expired_messages(self, now: float) -> None:
+        """调度撤回超时的验证码群消息"""
         expired_msgs = [qq for qq, d in self.verification_messages.items() if now - d["timestamp"] > 60]
         for qq in expired_msgs:
-            def create_retract(q: str) -> Any:
-                return lambda: asyncio.run_coroutine_threadsafe(self._delete_verification_message(q), self.plugin._loop) if (self.plugin.ws_client and self.plugin.ws_client.is_connected) else None
-            try:
-                self.plugin.server.scheduler.run_task(self.plugin, create_retract(qq), delay=1)
-            except Exception:
-                pass
+            self._schedule_retract(qq)
 
-        # 清理其它缓存
-        self._cleanup_expired_caches(now)
+    def _schedule_retract(self, qq_number: str) -> None:
+        """延迟 1 tick 调度单条验证码消息撤回"""
+        try:
+            self.plugin.server.scheduler.run_task(
+                self.plugin, lambda: self._retract_verification_message(qq_number), delay=1
+            )
+        except Exception as e:
+            self.logger.debug(f"调度验证码消息撤回失败: {e}")
+
+    def _retract_verification_message(self, qq_number: str) -> None:
+        """在连接可用时异步撤回指定验证码消息"""
+        if self.plugin.ws_client and self.plugin.ws_client.is_connected:
+            asyncio.run_coroutine_threadsafe(self._delete_verification_message(qq_number), self.plugin._loop)
 
     def _cleanup_expired_caches(self, now: float) -> None:
         """清理内存中超时的零散缓存数据"""
         # 待确认昵称信息超过10分钟强退
-        expired_conf = [k for k, v in self.pending_qq_confirmations.items() if now - v["timestamp"] > 600]
+        expired_conf = [k for k, v in self.pending_qq_confirmations.items() if now - v["timestamp"] > _CACHE_TTL_SECONDS]
         for k in expired_conf:
             self.pending_qq_confirmations.pop(k, None)
 
         # 频控列表整理（超出 10 分钟）
-        expired_cooldown = [k for k, t in self.player_verification_cooldown.items() if now - t > 600]
+        expired_cooldown = [k for k, t in self.player_verification_cooldown.items() if now - t > _CACHE_TTL_SECONDS]
         for k in expired_cooldown:
             self.player_verification_cooldown.pop(k, None)
 
     def cleanup_player_data(self, player_name: str) -> None:
-        """物理清除离线玩家全部的数据挂载缓存，避免内存泄露"""
+        """清除离线玩家的缓存数据"""
         self.pending_qq_confirmations.pop(player_name, None)
         self.player_bind_attempts.pop(player_name, None)
         self.concurrent_bindings.discard(player_name)
@@ -285,13 +308,10 @@ class Verification:
             self.pending_verifications.pop(player_name, None)
             self.verification_codes.pop(qq, None)
             # 撤回群消息
-            def retract() -> None:
-                if self.plugin.ws_client and self.plugin.ws_client.is_connected:
-                    asyncio.run_coroutine_threadsafe(self._delete_verification_message(qq), self.plugin._loop)
-            self.plugin.server.scheduler.run_task(self.plugin, retract, delay=1)
+            self._schedule_ws_coroutine(self._delete_verification_message, qq)
 
     async def _delete_verification_message(self, qq_number: str) -> None:
-        """通过 OneBot 接口物理撤回验证码消息"""
+        """通过 OneBot 接口撤回验证码消息"""
         if qq_number not in self.verification_messages:
             return
 
@@ -300,17 +320,21 @@ class Verification:
 
         if message_ids and self.plugin.ws_client and self.plugin.ws_client.is_connected:
             for mid in message_ids:
-                try:
-                    payload = {
-                        "action": "delete_msg",
-                        "params": {"message_id": mid},
-                        "echo": f"retract_msg:{qq_number}:{mid}",
-                    }
-                    await self.plugin.ws_client.send_message(payload)
-                except Exception as e:
-                    self.logger.warning(f"撤回消息 {mid} 失败: {e}")
+                await self._send_delete_message(qq_number, mid)
 
         self.verification_messages.pop(qq_number, None)
+
+    async def _send_delete_message(self, qq_number: str, message_id: Any) -> None:
+        """发送单条消息撤回请求"""
+        try:
+            payload = {
+                "action": "delete_msg",
+                "params": {"message_id": message_id},
+                "echo": f"retract_msg:{qq_number}:{message_id}",
+            }
+            await self.plugin.ws_client.send_message(payload)
+        except Exception as e:
+            self.logger.warning(f"撤回消息 {message_id} 失败: {e}")
 
     async def _handle_verification_success(self, player_name: str, qq_number: str) -> None:
         """验证通过后，在 QQ 群内广播消息并修改群名片"""
@@ -329,40 +353,46 @@ class Verification:
 
         # 广播给 TOML 内所有群聊
         for group in self.plugin.config_manager.groups:
-            try:
-                payload = {
-                    "action": "send_group_msg",
-                    "params": {
-                        "group_id": group["id"],
-                        "message": [
-                            {"type": "at", "data": {"qq": qq_number}},
-                            {"type": "text", "data": {"text": broadcast_text}},
-                        ],
-                    },
-                    "echo": f"bind_broadcast:{qq_number}:{group['id']}",
-                }
-                await self.plugin.ws_client.send_message(payload)
-            except Exception as e:
-                self.logger.error(f"发送绑定成功群广播失败 (群: {group['id']}): {e}")
+            await self._broadcast_binding_success(qq_number, group, broadcast_text)
+
+    async def _broadcast_binding_success(self, qq_number: str, group: dict[str, Any], broadcast_text: str) -> None:
+        """向单个群聊广播绑定完成消息"""
+        try:
+            payload = {
+                "action": "send_group_msg",
+                "params": {
+                    "group_id": group["id"],
+                    "message": [
+                        {"type": "at", "data": {"qq": qq_number}},
+                        {"type": "text", "data": {"text": broadcast_text}},
+                    ],
+                },
+                "echo": f"bind_broadcast:{qq_number}:{group['id']}",
+            }
+            await self.plugin.ws_client.send_message(payload)
+        except Exception as e:
+            self.logger.error(f"广播绑定完成消息失败 (群: {group['id']}): {e}")
 
     def handle_message_response(self, echo: str, message_id: int) -> None:
         """API 回执路由：捕获验证码消息的回包 message_id 并存储"""
         try:
             if echo.startswith("verification_msg:"):
-                # echo 结构: verification_msg:qq_number:group_id
-                parts = echo.split(":")
-                if len(parts) >= 2:
-                    qq = parts[1]
-                    self.store_verification_message(qq, message_id)
+                self._store_verification_from_echo(echo, message_id)
         except Exception as e:
             self.logger.error(f"处理API响应回包失败: {e}")
+
+    def _store_verification_from_echo(self, echo: str, message_id: int) -> None:
+        """解析 echo 结构中的 QQ 号并记录验证码消息 ID"""
+        parts = echo.split(":")
+        if len(parts) >= 2:
+            self.store_verification_message(parts[1], message_id)
 
     def handle_api_response(self, echo: str, status: str, data: dict[str, Any] | None = None) -> None:
         """处理其它 OneBot API 操作的响应（留空或记录日志）"""
         pass
 
     def store_verification_message(self, qq_number: str, message_id: int) -> None:
-        """记录发送成功的验证码消息 ID，以备超时或激活后撤回"""
+        """记录已发送的验证码消息 ID，以备超时或激活后撤回"""
         if qq_number not in self.verification_messages:
             self.verification_messages[qq_number] = {
                 "message_ids": [],
@@ -389,31 +419,9 @@ class Verification:
             return
 
         if self.plugin.ws_client and self.plugin.ws_client.is_connected:
-            text = (
-                f"\n验证码: {code}\n游戏ID: {name}\n"
-                f"[提示] 请在游戏内UI或对话框输入完成核验，\n或在群内直接回复 `/verify {code}`\n验证码60秒内有效"
-            )
+            text = self._build_verification_text(code, name)
 
-            # 向所有群异步发送
-            async def send_all() -> None:
-                for group in self.plugin.config_manager.groups:
-                    try:
-                        payload = {
-                            "action": "send_group_msg",
-                            "params": {
-                                "group_id": group["id"],
-                                "message": [
-                                    {"type": "at", "data": {"qq": qq}},
-                                    {"type": "text", "data": {"text": text}},
-                                ],
-                            },
-                            "echo": f"verification_msg:{qq}:{group['id']}",
-                        }
-                        await self.plugin.ws_client.send_message(payload)
-                    except Exception as ex:
-                        self.logger.error(f"向群 {group['id']} 发送验证码失败: {ex}")
-
-            asyncio.run_coroutine_threadsafe(send_all(), self.plugin._loop)
+            asyncio.run_coroutine_threadsafe(self._send_verification_to_groups(qq, text), self.plugin._loop)
             self.last_verification_send_time = now
 
             from endstone import ColorFormat
@@ -424,3 +432,33 @@ class Verification:
 
             player.send_message(f"{ColorFormat.GRAY}[QQsync] {ColorFormat.RED}服务器同 QQ 机器人断开连接，无法发送验证码！{ColorFormat.RESET}")
             self.unregister_verification_attempt(qq, name, False)
+
+    def _build_verification_text(self, code: str, name: str) -> str:
+        """拼接群内验证码提示文本"""
+        return (
+            f"\n验证码: {code}\n游戏ID: {name}\n"
+            f"[提示] 请在游戏内UI或对话框输入完成核验，\n或在群内直接回复 `/verify {code}`\n验证码60秒内有效"
+        )
+
+    async def _send_verification_to_groups(self, qq_number: str, text: str) -> None:
+        """向所有配置群聊发送验证码"""
+        for group in self.plugin.config_manager.groups:
+            await self._send_group_verification(qq_number, text, group)
+
+    async def _send_group_verification(self, qq_number: str, text: str, group: dict[str, Any]) -> None:
+        """向单个群聊发送验证码消息"""
+        try:
+            payload = {
+                "action": "send_group_msg",
+                "params": {
+                    "group_id": group["id"],
+                    "message": [
+                        {"type": "at", "data": {"qq": qq_number}},
+                        {"type": "text", "data": {"text": text}},
+                    ],
+                },
+                "echo": f"verification_msg:{qq_number}:{group['id']}",
+            }
+            await self.plugin.ws_client.send_message(payload)
+        except Exception as ex:
+            self.logger.error(f"向群 {group['id']} 发送验证码失败: {ex}")

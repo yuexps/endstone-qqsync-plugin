@@ -6,6 +6,9 @@ from pathlib import Path
 import tomllib
 from typing import Any
 
+# 默认群组 QQ 号
+_DEFAULT_GROUP_ID = 712523104
+
 
 DEFAULT_TOML_TEMPLATE = """# QQsync 群服互通插件配置文件
 
@@ -69,31 +72,25 @@ class Config:
         self._load_or_create_ban_words()
 
     def _load_or_create_config(self) -> None:
-        """加载或自动创建配置文件"""
-        old_config_file = self.data_folder / "config.json"
+        """加载或创建配置文件"""
+        if not self.config_file.exists():
+            self._create_default_config()
 
-        if old_config_file.exists():
-            self.config_file.parent.mkdir(parents=True, exist_ok=True)
-            if self.config_file.exists():
-                backup_toml = self.config_file.with_suffix(".toml.bak")
-                try:
-                    if backup_toml.exists():
-                        backup_toml.unlink()
-                    self.config_file.rename(backup_toml)
-                    self.logger.info(f"检测到旧版配置且 config.toml 已存在，已将现配置备份为: {backup_toml.name}")
-                except Exception as e:
-                    self.logger.error(f"备份 config.toml 失败: {e}")
-            self._migrate_old_config(old_config_file)
-        else:
-            if not self.config_file.exists():
-                self.config_file.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    with open(self.config_file, "w", encoding="utf-8") as f:
-                        f.write(DEFAULT_TOML_TEMPLATE)
-                    self.logger.info(f"已创建默认 TOML 配置文件: {self.config_file}")
-                except Exception as e:
-                    self.logger.error(f"创建默认配置文件失败: {e}")
+        self._read_config_file()
 
+
+    def _create_default_config(self) -> None:
+        """创建默认 TOML 配置文件"""
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                f.write(DEFAULT_TOML_TEMPLATE)
+            self.logger.info(f"已创建默认 TOML 配置文件: {self.config_file}")
+        except Exception as e:
+            self.logger.error(f"创建默认配置文件失败: {e}")
+
+    def _read_config_file(self) -> None:
+        """读取 TOML 配置文件并应用到内存属性"""
         try:
             with open(self.config_file, "rb") as f:
                 data = tomllib.load(f)
@@ -101,69 +98,12 @@ class Config:
         except Exception as e:
             self.logger.error(f"解析 TOML 配置文件失败: {e}，将使用内存默认值")
 
-    def _migrate_old_config(self, old_file: Path) -> None:
-        """从旧的 config.json 迁移配置到 config.toml"""
-        import json
-        self.logger.info("检测到旧版 JSON 配置，开始自动迁移至 TOML...")
-        try:
-            with open(old_file, "r", encoding="utf-8") as f:
-                old_data = json.load(f)
 
-            # 映射旧配置到内存属性
-            self.napcat_ws = old_data.get("napcat_ws", self.napcat_ws)
-            self.access_token = old_data.get("access_token", self.access_token)
-            self.admins = [str(x) for x in old_data.get("admins", self.admins)]
-            self.enable_qq_to_game = bool(old_data.get("enable_qq_to_game", self.enable_qq_to_game))
-            self.enable_game_to_qq = bool(old_data.get("enable_game_to_qq", self.enable_game_to_qq))
-            self.force_bind_qq = bool(old_data.get("force_bind_qq", self.force_bind_qq))
-            self.sync_group_card = bool(old_data.get("sync_group_card", self.sync_group_card))
-            self.check_group_member = bool(old_data.get("check_group_member", self.check_group_member))
-            self.chat_count_limit = int(old_data.get("chat_count_limit", self.chat_count_limit))
-            self.chat_ban_time = int(old_data.get("chat_ban_time", self.chat_ban_time))
-            self.api_qq_enable = bool(old_data.get("api_qq_enable", self.api_qq_enable))
 
-            # 解析群组配置
-            target_groups = old_data.get("target_groups", [])
-            group_names = old_data.get("group_names", {})
-            self.groups = []
 
-            if "target_group" in old_data and not target_groups:
-                target_groups = [old_data["target_group"]]
 
-            for g_id in target_groups:
-                try:
-                    group_id = int(g_id)
-                    group_name = str(group_names.get(str(g_id), f"群 {g_id}"))
-                    self.groups.append({
-                        "id": group_id,
-                        "name": group_name,
-                        "enable_chat": True,
-                        "enable_command": True
-                    })
-                except (ValueError, TypeError):
-                    continue
-
-            if not self.groups:
-                self.groups.append({
-                    "id": 712523104,
-                    "name": "默认群组",
-                    "enable_chat": True,
-                    "enable_command": True
-                })
-
-            # 保存为 config.toml 并备份旧文件
-            self.save_config()
-
-            backup_file = old_file.with_suffix(".json.bak")
-            if backup_file.exists():
-                backup_file.unlink()
-            old_file.rename(backup_file)
-            self.logger.info(f"配置迁移成功，旧文件已备份为: {backup_file.name}")
-        except Exception as e:
-            self.logger.error(f"配置迁移失败: {e}")
-
-    def _apply_config_data(self, data: dict[str, Any]) -> None:
-        """映射解析出的字典到内存属性"""
+    def _apply_common_config(self, data: dict[str, Any]) -> None:
+        """映射通用配置项到内存属性"""
         self.napcat_ws = data.get("napcat_ws", self.napcat_ws)
         self.access_token = data.get("access_token", self.access_token)
         self.admins = [str(x) for x in data.get("admins", self.admins)]
@@ -175,50 +115,70 @@ class Config:
         self.chat_count_limit = int(data.get("chat_count_limit", self.chat_count_limit))
         self.chat_ban_time = int(data.get("chat_ban_time", self.chat_ban_time))
         self.api_qq_enable = bool(data.get("api_qq_enable", self.api_qq_enable))
+
+    def _apply_config_data(self, data: dict[str, Any]) -> None:
+        """映射解析出的字典到内存属性"""
+        self._apply_common_config(data)
         self.msg_first_join = str(data.get("msg_first_join", self.msg_first_join))
         self.msg_join = str(data.get("msg_join", self.msg_join))
         self.msg_quit = str(data.get("msg_quit", self.msg_quit))
 
         # 处理群组表数组
-        self.groups = []
-        raw_groups = data.get("groups", [])
-        if isinstance(raw_groups, list):
-            for g in raw_groups:
-                if isinstance(g, dict) and "id" in g:
-                    self.groups.append(
-                        {
-                            "id": int(g["id"]),
-                            "name": str(g.get("name", f"群 {g['id']}")),
-                            "enable_chat": bool(g.get("enable_chat", True)),
-                            "enable_command": bool(g.get("enable_command", True)),
-                        }
-                    )
+        self._apply_groups(data)
 
-        # 兼容老版过渡逻辑：若无群组则默认添加一个空缺省值
+    def _apply_groups(self, data: dict[str, Any]) -> None:
+        """解析群组表数组配置"""
+        raw_groups = data.get("groups", [])
+        parsed_groups = [self._build_group(g) for g in raw_groups] if isinstance(raw_groups, list) else []
+        self.groups = [g for g in parsed_groups if g]
+
+        # 未配置群组时回退到默认群组
         if not self.groups:
-            self.groups.append(
-                {
-                    "id": 712523104,
-                    "name": "默认群组",
-                    "enable_chat": True,
-                    "enable_command": True,
-                }
-            )
+            self.groups.append(self._build_default_group())
+
+    def _build_group(self, g: Any) -> dict[str, Any] | None:
+        """构造单个 TOML 群组配置"""
+        if isinstance(g, dict) and "id" in g:
+            return {
+                "id": int(g["id"]),
+                "name": str(g.get("name", f"群 {g['id']}")),
+                "enable_chat": bool(g.get("enable_chat", True)),
+                "enable_command": bool(g.get("enable_command", True)),
+            }
+        return None
+
+    @staticmethod
+    def _build_default_group() -> dict[str, Any]:
+        """构造默认群组配置"""
+        return {
+            "id": _DEFAULT_GROUP_ID,
+            "name": "默认群组",
+            "enable_chat": True,
+            "enable_command": True,
+        }
 
     def _load_or_create_ban_words(self) -> None:
         """加载自定义屏蔽词文件"""
         if not self.ban_words_file.exists():
-            self.ban_words_file.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                with open(self.ban_words_file, "w", encoding="utf-8") as f:
-                    f.write("这是一个自定义屏蔽词\n这是另一个自定义屏蔽词\n")
-            except Exception as e:
-                self.logger.error(f"创建默认自定义屏蔽词文件失败: {e}")
+            self._create_default_ban_words_file()
 
+        self._read_ban_words_file()
+
+    def _create_default_ban_words_file(self) -> None:
+        """创建默认自定义屏蔽词文件"""
+        self.ban_words_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(self.ban_words_file, "w", encoding="utf-8") as f:
+                f.write("这是一个自定义屏蔽词\n这是另一个自定义屏蔽词\n")
+        except Exception as e:
+            self.logger.error(f"创建默认自定义屏蔽词文件失败: {e}")
+
+    def _read_ban_words_file(self) -> None:
+        """读取自定义屏蔽词文件内容"""
         try:
             with open(self.ban_words_file, "r", encoding="utf-8") as f:
                 self.custom_ban_words = [line.strip() for line in f if line.strip()]
-            self.logger.info(f"已成功加载 {len(self.custom_ban_words)} 个自定义屏蔽词")
+            self.logger.info(f"已加载 {len(self.custom_ban_words)} 个自定义屏蔽词")
         except Exception as e:
             self.logger.error(f"读取自定义屏蔽词文件失败: {e}")
             self.custom_ban_words = []
@@ -260,7 +220,7 @@ class Config:
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
-            self.logger.info("配置保存成功")
+            self.logger.info("配置已保存")
         except Exception as e:
             self.logger.error(f"写入 TOML 配置文件失败: {e}")
 

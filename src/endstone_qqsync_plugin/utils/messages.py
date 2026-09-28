@@ -6,6 +6,9 @@ import base64
 import re
 from typing import Any
 
+# 消息文本默认截断的最大长度
+_MAX_MESSAGE_LENGTH = 150
+
 
 # 常见表情中英文字符串替换映射表
 EMOJI_MAP: dict[str, str] = {
@@ -77,18 +80,29 @@ ENCODED_SENSITIVE_WORDS: list[str] = [
 _DECODED_SENSITIVE_WORDS_CACHE: set[str] = set()
 
 
+def _decode_sensitive_word(val: str) -> str | None:
+    """解码单个 Base64 敏感词"""
+    try:
+        return base64.b64decode(val).decode("utf-8")
+    except Exception:
+        return None
+
+
+def _decode_sensitive_words() -> set[str]:
+    """解码 Base64 敏感词库为明文集合"""
+    words: set[str] = set()
+    for val in ENCODED_SENSITIVE_WORDS:
+        decoded = _decode_sensitive_word(val)
+        if decoded is not None:
+            words.add(decoded)
+    return words
+
+
 def get_sensitive_words() -> set[str]:
     """获取所有敏感词解密集合（包含惰性加载缓存）"""
     global _DECODED_SENSITIVE_WORDS_CACHE
     if not _DECODED_SENSITIVE_WORDS_CACHE:
-        words = set()
-        for val in ENCODED_SENSITIVE_WORDS:
-            try:
-                decoded = base64.b64decode(val).decode("utf-8")
-                words.add(decoded)
-            except Exception:
-                continue
-        _DECODED_SENSITIVE_WORDS_CACHE = words
+        _DECODED_SENSITIVE_WORDS_CACHE = _decode_sensitive_words()
     return _DECODED_SENSITIVE_WORDS_CACHE.copy()
 
 
@@ -133,6 +147,36 @@ class MessageMiddleware:
         return content, False
 
 
+def _replace_cq_code(match: re.Match) -> str:
+    """将单个 CQ 码替换为可读占位文本"""
+    cq_type = match.group(1)
+    mapping = {
+        "image": "[图片]",
+        "video": "[视频]",
+        "record": "[语音]",
+        "face": "[表情]",
+        "reply": "[回复]",
+        "forward": "[转发]",
+        "file": "[文件]",
+        "share": "[分享]",
+        "location": "[位置]",
+        "music": "[音乐]",
+        "xml": "[卡片]",
+        "json": "[卡片]",
+    }
+    if cq_type in mapping:
+        return mapping[cq_type]
+    if cq_type == "at":
+        params = match.group(2) or ""
+        if "qq=all" in params:
+            return "@全体成员"
+        qq_match = re.search(r"qq=(\d+)", params)
+        if qq_match:
+            return f"@{qq_match.group(1)}"
+        return "@某人"
+    return "[非文本]"
+
+
 class CQCodeFilter(MessageMiddleware):
     """QQ 侧消息 CQ 码与 Emoji 占位替换中间件"""
 
@@ -145,36 +189,8 @@ class CQCodeFilter(MessageMiddleware):
             return "", False
 
         # 解析 OneBot 中的 [CQ:type,key=val]
-        def _replace_cq(match: re.Match) -> str:
-            cq_type = match.group(1)
-            mapping = {
-                "image": "[图片]",
-                "video": "[视频]",
-                "record": "[语音]",
-                "face": "[表情]",
-                "reply": "[回复]",
-                "forward": "[转发]",
-                "file": "[文件]",
-                "share": "[分享]",
-                "location": "[位置]",
-                "music": "[音乐]",
-                "xml": "[卡片]",
-                "json": "[卡片]",
-            }
-            if cq_type in mapping:
-                return mapping[cq_type]
-            if cq_type == "at":
-                params = match.group(2) or ""
-                if "qq=all" in params:
-                    return "@全体成员"
-                qq_match = re.search(r"qq=(\d+)", params)
-                if qq_match:
-                    return f"@{qq_match.group(1)}"
-                return "@某人"
-            return "[非文本]"
-
         cq_pattern = r"\[CQ:([^,\]]+)(?:,([^\]]*))?\]"
-        processed = re.sub(cq_pattern, _replace_cq, content)
+        processed = re.sub(cq_pattern, _replace_cq_code, content)
 
         # 映射常用文本 emoji
         for emoji, desc in EMOJI_MAP.items():
@@ -235,14 +251,14 @@ class MessageCleanFilter(MessageMiddleware):
         processed = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", processed)
 
         # 长度限制截断
-        max_length = ctx.get("max_length", 150)
+        max_length = ctx.get("max_length", _MAX_MESSAGE_LENGTH)
         if len(processed) > max_length:
             processed = processed[: max_length - 3] + "..."
 
         return super().process(processed, ctx)
 
 
-# 封装统一的处理管道调用入口
+# 消息处理管道入口
 class MessagePipeline:
     """封装好的消息过滤链条管道入口"""
 
