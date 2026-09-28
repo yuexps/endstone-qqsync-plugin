@@ -631,6 +631,7 @@ class Data:
     def _save_timer_progress(self) -> None:
         """批量同步当前在线未下线角色的部分累计时长进库"""
         now = Timing.get_timestamp()
+        saved = 0
         for key, (player_id, start_time) in list(self._online_timers.items()):
             duration = max(0, now - start_time)
             if duration > 0:
@@ -640,7 +641,10 @@ class Data:
                 )
                 # 重置该玩家的计时起点为当前，防止重复计算
                 self._online_timers[key] = (player_id, now)
-        self.logger.info("已保存当前在线玩家的阶段计时进度")
+                saved += 1
+
+        if saved:
+            self.logger.debug(f"已保存 {saved} 名在线玩家的计时进度")
 
     def cleanup_timer_system(self) -> None:
         """插件禁用时强制结算所有计时器并将时长落盘"""
