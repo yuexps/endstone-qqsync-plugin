@@ -124,7 +124,7 @@ class WebSocketClient:
             )
         # 2. 广播服务器启动通知
         if hasattr(self.plugin, "_send_startup_message") and self.plugin._send_startup_message:
-            await self.broadcast_to_groups("[QQSync] 游戏服务器已启动！")
+            await self.broadcast_to_groups("[QQSync] 游戏服务器已启动")
             self.plugin._send_startup_message = False
 
     async def _heartbeat(self) -> None:

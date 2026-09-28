@@ -439,7 +439,7 @@ class qqsync(Plugin):
 
         try:
             fut = asyncio.run_coroutine_threadsafe(
-                self.ws_client.broadcast_to_groups("[QQSync] 游戏服务器已停止运行！"),
+                self.ws_client.broadcast_to_groups("[QQSync] 游戏服务器已停止"),
                 self._loop,
             )
             # 强阻塞3秒等待发送回执
